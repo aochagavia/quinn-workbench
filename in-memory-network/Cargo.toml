@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+fastrand = { workspace = true }
 pcap-file = { workspace = true }
 pnet_packet = { workspace = true }
 quinn = { workspace = true }

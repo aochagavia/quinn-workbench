@@ -4,6 +4,7 @@ resolver = "2"
 
 [workspace.dependencies]
 anyhow = "1.0.86"
+fastrand = { version = "2.1.0", default-features = false }
 pcap-file = "2.0.0"
 pnet_packet = "0.34.0"
 quinn = "0.11.1"

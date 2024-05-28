@@ -35,9 +35,11 @@ async fn run() -> anyhow::Result<()> {
     let pcap_exporter = Arc::new(PcapExporter::new());
     let simulated_link_delay = Duration::from_secs(5);
     let simulated_link_capacity = usize::MAX;
+    let packet_loss_ratio = 0.05;
     let network = Arc::new(InMemoryNetwork::initialize(
         simulated_link_delay,
         simulated_link_capacity,
+        packet_loss_ratio,
         pcap_exporter.clone(),
     ));
 
@@ -49,7 +51,7 @@ async fn run() -> anyhow::Result<()> {
     let client = client_endpoint(cert, network)?;
     let connection = client.connect(SERVER_ADDR, server_name)?.await?;
 
-    let request_number = 5;
+    let request_number = 10;
     let request = "GET /index.html";
     let start = Instant::now();
     for _ in 0..request_number {

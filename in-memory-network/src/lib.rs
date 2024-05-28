@@ -1,3 +1,4 @@
+use fastrand::Rng;
 use pcap_file::pcap::{PcapHeader, PcapPacket, PcapWriter};
 use pcap_file::{DataLink, Endianness, TsResolution};
 use pnet_packet::ip::IpNextHeaderProtocol;
@@ -129,6 +130,8 @@ impl UdpPoller for InMemoryUdpPoller {
 pub struct InMemorySocketHandle {
     pub network: Arc<InMemoryNetwork>,
     pub addr: SocketAddr,
+    rng: Mutex<Rng>,
+    packet_loss_ratio: f64,
     pcap_exporter: Arc<PcapExporter>,
 }
 
@@ -138,6 +141,14 @@ impl AsyncUdpSocket for InMemorySocketHandle {
     }
 
     fn try_send(&self, transmit: &Transmit) -> std::io::Result<()> {
+        {
+            let roll = self.rng.lock().unwrap().f64();
+            if roll < self.packet_loss_ratio {
+                println!("Packet lost!");
+                return Ok(());
+            }
+        }
+
         let now = Instant::now();
         let transmit = Transmit {
             destination: transmit.destination,
@@ -294,6 +305,7 @@ mod queue {
 pub struct InMemoryNetwork {
     pub sockets: Vec<InMemorySocket>,
     pcap_exporter: Arc<PcapExporter>,
+    packet_loss_ratio: f64,
 }
 
 impl InMemoryNetwork {
@@ -303,6 +315,7 @@ impl InMemoryNetwork {
     pub fn initialize(
         link_delay: Duration,
         link_capacity: usize,
+        packet_loss_ratio: f64,
         pcap_exporter: Arc<PcapExporter>,
     ) -> Self {
         let server_addr = SERVER_ADDR;
@@ -314,6 +327,7 @@ impl InMemoryNetwork {
                 InMemorySocket::new(client_addr, link_delay, link_capacity),
             ],
             pcap_exporter,
+            packet_loss_ratio,
         }
     }
 
@@ -321,6 +335,8 @@ impl InMemoryNetwork {
     pub fn server_socket(self: Arc<InMemoryNetwork>) -> InMemorySocketHandle {
         InMemorySocketHandle {
             addr: self.sockets[0].addr,
+            packet_loss_ratio: self.packet_loss_ratio,
+            rng: Mutex::new(Rng::with_seed(42)),
             network: self.clone(),
             pcap_exporter: self.pcap_exporter.clone(),
         }
@@ -330,6 +346,8 @@ impl InMemoryNetwork {
     pub fn client_socket(self: Arc<InMemoryNetwork>) -> InMemorySocketHandle {
         InMemorySocketHandle {
             addr: self.sockets[1].addr,
+            packet_loss_ratio: self.packet_loss_ratio,
+            rng: Mutex::new(Rng::with_seed(55)),
             network: self.clone(),
             pcap_exporter: self.pcap_exporter.clone(),
         }
