@@ -19,6 +19,10 @@ use quinn::{AsyncUdpSocket, UdpPoller};
 
 use queue::InboundQueue;
 
+pub const SERVER_ADDR: SocketAddr =
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(88, 88, 88, 88)), 8080);
+pub const CLIENT_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 8080);
+
 #[derive(Debug)]
 pub struct PcapExporter {
     capture_start: Instant,
@@ -62,6 +66,8 @@ impl PcapExporter {
             unreachable!()
         };
 
+        // Rewrite the addresses, so it's easier to view them in Wireshark
+
         let mut buffer = vec![0; 2000];
 
         // Wrap the data in a UDP packet
@@ -76,22 +82,7 @@ impl PcapExporter {
         drop(udp_writer);
         let udp_packet = buffer[0..udp_packet_length as usize].to_vec();
 
-        // // Wrap the UDP packet in an IP packet
-        // let ip_packet = Ipv4 {
-
-        //     dscp: 0, // Copied from a Wireshark dump
-        //     ecn: 0b10, // Copied from a Wireshark dump
-        //     identification: 0, // We never fragment
-        //     flags: 0b010, // We never fragment (copied from a Wireshark dump)
-        //     fragment_offset: 0, // Copied from a Wireshark dump
-        //     ttl: 64, // Copied from a Wireshark dump
-        //     next_level_protocol: IpNextHeaderProtocol::new(17), // 17 = UDP
-        //     source,
-        //     destination,
-        //     options: vec![],
-        //     payload: vec![],
-        // };
-
+        // Wrap the UDP packet in an IP packet
         let mut ip_writer = MutableIpv4Packet::new(&mut buffer).unwrap();
         let ip_packet_length = 20 + udp_packet_length;
         ip_writer.set_version(4);
@@ -314,8 +305,8 @@ impl InMemoryNetwork {
         link_capacity: usize,
         pcap_exporter: Arc<PcapExporter>,
     ) -> Self {
-        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
-        let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081);
+        let server_addr = SERVER_ADDR;
+        let client_addr = CLIENT_ADDR;
 
         Self {
             sockets: vec![
