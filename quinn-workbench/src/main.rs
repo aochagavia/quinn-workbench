@@ -1,12 +1,16 @@
+mod no_cc;
+
+use crate::no_cc::NoCCConfig;
 use anyhow::{anyhow, Context};
 use in_memory_network::{InMemoryNetwork, PcapExporter, SERVER_ADDR};
 use quinn::crypto::rustls::QuicClientConfig;
 use quinn::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use quinn::rustls::RootCertStore;
 use quinn::{ClientConfig, Endpoint, EndpointConfig, TransportConfig, VarInt};
+use quinn_proto::AckFrequencyConfig;
 use rustls::pki_types::PrivatePkcs8KeyDer;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn main() -> anyhow::Result<()> {
     std::env::set_var("SSLKEYLOGFILE", "keylog.key");
@@ -29,7 +33,7 @@ async fn run() -> anyhow::Result<()> {
 
     // Network
     let pcap_exporter = Arc::new(PcapExporter::new());
-    let simulated_link_delay = Duration::from_secs(0);
+    let simulated_link_delay = Duration::from_secs(5);
     let simulated_link_capacity = usize::MAX;
     let network = Arc::new(InMemoryNetwork::initialize(
         simulated_link_delay,
@@ -45,18 +49,25 @@ async fn run() -> anyhow::Result<()> {
     let client = client_endpoint(cert, network)?;
     let connection = client.connect(SERVER_ADDR, server_name)?.await?;
 
-    let mut received = Vec::new();
-    for b in 42..45 {
+    let request_number = 5;
+    let request = "GET /index.html";
+    let start = Instant::now();
+    for _ in 0..request_number {
+        println!("{:.02}s {request}", start.elapsed().as_secs_f64());
+
         let (mut tx, mut rx) = connection.open_bi().await?;
-        tx.write_all(&[b]).await?;
+        tx.write_all(request.as_bytes()).await?;
+        tx.finish()?;
 
-        let mut buf = [0];
-        rx.read_exact(&mut buf).await?;
-
-        received.push(buf[0]);
+        rx.read_to_end(usize::MAX).await?;
     }
 
-    connection.close(VarInt::from_u32(0), b"done");
+    println!(
+        "Done! Sent {request_number} requests in {:.02}s",
+        start.elapsed().as_secs_f64()
+    );
+
+    connection.close(VarInt::from_u32(0), &[]);
 
     drop(connection);
     drop(client);
@@ -65,8 +76,6 @@ async fn run() -> anyhow::Result<()> {
         .await
         .context("server task crashed")?
         .context("server task errored")?;
-
-    println!("Done! Received: {received:?}");
 
     pcap_exporter.save("capture.pcap".as_ref());
 
@@ -80,13 +89,19 @@ async fn server_listen(endpoint: Endpoint) -> anyhow::Result<()> {
         .ok_or(anyhow!("failed to accept incoming connection"))?
         .await?;
 
-    while let Ok((mut tx, mut rx)) = conn.accept_bi().await {
-        // Read a single byte
-        let mut buf = [0];
-        rx.read_exact(&mut buf).await?;
+    let response = "<html>
+      <h1>Hello from Internet in Deep Space</h1>
+      <p>This message was sent over HTTP/QUIC/UDP/IP with a long delay</p>
+    </html>";
 
-        // Echo it back
-        tx.write(&buf).await?;
+    while let Ok((mut tx, mut rx)) = conn.accept_bi().await {
+        // Read the request
+        let request = rx.read_to_end(usize::MAX).await?;
+        assert_eq!(request, b"GET /index.html");
+
+        // Respond
+        tx.write(response.as_bytes()).await?;
+        tx.finish()?;
     }
 
     Ok(())
@@ -152,7 +167,20 @@ fn client_config(server_cert: CertificateDer<'_>) -> anyhow::Result<ClientConfig
 fn transport_config() -> TransportConfig {
     let mut config = TransportConfig::default();
     config.mtu_discovery_config(None);
-    // config.initial_rtt(Duration::from_secs(5));
+
+    // DTN stuff
+    config.max_idle_timeout(Some(VarInt::MAX.into()));
+    config.receive_window(VarInt::MAX);
+    config.datagram_send_buffer_size(usize::MAX);
+    config.send_window(u64::MAX);
+    config.datagram_receive_buffer_size(Some(usize::MAX));
+    config.stream_receive_window(VarInt::MAX);
+    config.congestion_controller_factory(Arc::new(NoCCConfig::default()));
+    let mut ack_frequency_config = AckFrequencyConfig::default();
+    ack_frequency_config.max_ack_delay(Some(Duration::MAX));
+    config.ack_frequency_config(Some(ack_frequency_config));
+    config.packet_threshold(u32::MAX);
+    config.initial_rtt(Duration::from_secs(100000));
 
     config
 }

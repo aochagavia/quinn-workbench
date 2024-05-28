@@ -7,6 +7,7 @@ anyhow = "1.0.86"
 pcap-file = "2.0.0"
 pnet_packet = "0.34.0"
 quinn = "0.11.1"
+quinn-proto = "0.11.1"
 rcgen = "0.13.1"
 rustls = {  version = "0.23.8", default-features = false, features = ["ring"] }
 tokio = "1.37.0"

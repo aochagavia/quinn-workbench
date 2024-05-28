@@ -447,6 +447,7 @@ dependencies = [
  "anyhow",
  "in-memory-network",
  "quinn",
+ "quinn-proto",
  "rcgen",
  "rustls",
  "tokio",
