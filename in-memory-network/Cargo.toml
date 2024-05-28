@@ -1,0 +1,10 @@
+[package]
+name = "in-memory-network"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pcap-file = { workspace = true }
+pnet_packet = { workspace = true }
+quinn = { workspace = true }
+tokio = { workspace = true }
