@@ -65,7 +65,7 @@ async fn run() -> anyhow::Result<()> {
     }
 
     println!(
-        "Done! Sent {request_number} requests in {:.02}s",
+        "Done! Sent {request_number} requests in {:.02}s. Waiting for connection close...",
         start.elapsed().as_secs_f64()
     );
 
@@ -78,6 +78,11 @@ async fn run() -> anyhow::Result<()> {
         .await
         .context("server task crashed")?
         .context("server task errored")?;
+
+    println!(
+        "Time from start to connection closed: {:.02}s",
+        start.elapsed().as_secs_f64()
+    );
 
     pcap_exporter.save("capture.pcap".as_ref());
 
