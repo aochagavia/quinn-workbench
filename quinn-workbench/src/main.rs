@@ -2,6 +2,7 @@ mod no_cc;
 
 use crate::no_cc::NoCCConfig;
 use anyhow::{anyhow, Context};
+use clap::Parser;
 use in_memory_network::{InMemoryNetwork, PcapExporter, SERVER_ADDR};
 use quinn::crypto::rustls::QuicClientConfig;
 use quinn::rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -11,7 +12,6 @@ use quinn_proto::AckFrequencyConfig;
 use rustls::pki_types::PrivatePkcs8KeyDer;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use clap::Parser;
 
 #[derive(Parser, Debug)]
 struct Opt {
@@ -156,7 +156,7 @@ fn server_endpoint(
     cert: CertificateDer<'static>,
     key: PrivateKeyDer<'static>,
     network: Arc<InMemoryNetwork>,
-    options: &Opt
+    options: &Opt,
 ) -> anyhow::Result<Endpoint> {
     let mut server_config = quinn::ServerConfig::with_single_cert(vec![cert], key).unwrap();
     server_config.transport = Arc::new(transport_config(options));
@@ -172,7 +172,7 @@ fn server_endpoint(
 fn client_endpoint(
     server_cert: CertificateDer<'_>,
     network: Arc<InMemoryNetwork>,
-    options: &Opt
+    options: &Opt,
 ) -> anyhow::Result<Endpoint> {
     let mut endpoint = Endpoint::new_with_abstract_socket(
         EndpointConfig::default(),
