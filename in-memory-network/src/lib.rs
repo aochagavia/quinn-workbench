@@ -6,6 +6,9 @@ use pnet_packet::ipv4::MutableIpv4Packet;
 use pnet_packet::udp;
 use pnet_packet::udp::MutableUdpPacket;
 use pnet_packet::{ipv4, PacketSize};
+use queue::InboundQueue;
+use quinn::udp::{RecvMeta, Transmit};
+use quinn::{AsyncUdpSocket, UdpPoller};
 use std::collections::VecDeque;
 use std::io::IoSliceMut;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -13,12 +16,8 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
-use std::time::{Duration, Instant};
-
-use quinn::udp::{RecvMeta, Transmit};
-use quinn::{AsyncUdpSocket, UdpPoller};
-
-use queue::InboundQueue;
+use std::time::Duration;
+use tokio::time::Instant;
 
 pub const SERVER_ADDR: SocketAddr =
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(88, 88, 88, 88)), 8080);

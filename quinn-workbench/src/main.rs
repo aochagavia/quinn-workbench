@@ -11,7 +11,8 @@ use quinn::{ClientConfig, Endpoint, EndpointConfig, TransportConfig, VarInt};
 use quinn_proto::AckFrequencyConfig;
 use rustls::pki_types::PrivatePkcs8KeyDer;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 #[derive(Parser, Debug)]
 struct Opt {
@@ -43,6 +44,7 @@ fn main() -> anyhow::Result<()> {
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
+        .start_paused(true)
         .build()
         .expect("failed to initialize tokio");
 
