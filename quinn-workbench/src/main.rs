@@ -75,11 +75,12 @@ async fn run(options: &Opt) -> anyhow::Result<()> {
 
     // Make repeated requests
     let client = client_endpoint(cert, network, options)?;
+    let start = Instant::now();
+    println!("0.00s CONNECT");
     let connection = client.connect(SERVER_ADDR, server_name)?.await?;
 
     let request_number = options.repeat;
     let request = "GET /index.html";
-    let start = Instant::now();
     for _ in 0..request_number {
         println!("{:.02}s {request}", start.elapsed().as_secs_f64());
 
