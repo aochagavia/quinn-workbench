@@ -15,26 +15,26 @@ use std::time::{Duration, Instant};
 
 #[derive(Parser, Debug)]
 struct Opt {
-    // sets many transport config parameters to very large values (such as ::MAX) to handle
-    // deep space usage, where delays and disruptions can be in order of minutes, hours, days
-    #[clap(long = "dtn")]
+    /// Sets many transport config parameters to very large values (such as ::MAX) to handle
+    /// deep space usage, where delays and disruptions can be in order of minutes, hours, days
+    #[arg(long)]
     dtn: bool,
 
-    //to simulate a single connection with multiple http requests: repeat the same request
-    #[clap(long = "repeat")]
-    repeat: Option<u32>,
+    /// The amount of times the http request should be repeated
+    #[arg(long, default_value_t = 10)]
+    repeat: u32,
 
-    // sets the delay on outgoing packets, in seconds
-    #[clap(long = "delay")]
-    delay: Option<u64>,
+    /// The delay on outgoing packets, in seconds
+    #[arg(long, default_value_t = 5)]
+    delay: u64,
 
-    // sets the bandwidth of the simulated link
-    #[clap(long = "bandwidth")]
-    bandwidth: Option<usize>,
+    /// The bandwidth of the simulated link, in bytes
+    #[arg(long, default_value_t = usize::MAX)]
+    bandwidth: usize,
 
-    // sets the ratio of packet loss, 0.1 = 10% packet loss
-    #[clap(long = "loss")]
-    loss: Option<f64>,
+    /// The ratio of packet loss (e.g. 0.1 = 10% packet loss)
+    #[arg(long, default_value_t = 0.05)]
+    loss: f64,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -59,18 +59,9 @@ async fn run(options: &Opt) -> anyhow::Result<()> {
 
     // Network
     let pcap_exporter = Arc::new(PcapExporter::new());
-    let mut simulated_link_delay = Duration::from_secs(5);
-    if let Some(delay) = options.delay {
-        simulated_link_delay = Duration::from_secs(delay);
-    }
-    let mut simulated_link_capacity = usize::MAX;
-    if let Some(bandwidth) = options.bandwidth {
-        simulated_link_capacity = bandwidth;
-    }
-    let mut packet_loss_ratio = 0.05;
-    if let Some(loss) = options.loss {
-        packet_loss_ratio = loss;
-    }
+    let simulated_link_delay = Duration::from_secs(options.delay);
+    let simulated_link_capacity = options.bandwidth;
+    let packet_loss_ratio = options.loss;
     let network = Arc::new(InMemoryNetwork::initialize(
         simulated_link_delay,
         simulated_link_capacity,
@@ -86,10 +77,7 @@ async fn run(options: &Opt) -> anyhow::Result<()> {
     let client = client_endpoint(cert, network, options)?;
     let connection = client.connect(SERVER_ADDR, server_name)?.await?;
 
-    let mut request_number = 10;
-    if let Some(repeat) = options.repeat {
-        request_number = repeat;
-    }
+    let request_number = options.repeat;
     let request = "GET /index.html";
     let start = Instant::now();
     for _ in 0..request_number {
