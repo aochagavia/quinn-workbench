@@ -151,11 +151,12 @@ fn server_endpoint(
 ) -> anyhow::Result<Endpoint> {
     let mut server_config = quinn::ServerConfig::with_single_cert(vec![cert], key).unwrap();
     server_config.transport = Arc::new(transport_config(options));
-    Endpoint::new_with_abstract_socket(
+    Endpoint::new_with_abstract_socket_and_rng_seed(
         EndpointConfig::default(),
         Some(server_config),
         Arc::new(network.server_socket()),
         quinn::default_runtime().unwrap(),
+        [0; 32],
     )
     .context("failed to create server endpoint")
 }
@@ -165,11 +166,12 @@ fn client_endpoint(
     network: Arc<InMemoryNetwork>,
     options: &Opt,
 ) -> anyhow::Result<Endpoint> {
-    let mut endpoint = Endpoint::new_with_abstract_socket(
+    let mut endpoint = Endpoint::new_with_abstract_socket_and_rng_seed(
         EndpointConfig::default(),
         None,
         Arc::new(network.client_socket()),
         quinn::default_runtime().unwrap(),
+        [0; 32],
     )
     .context("failed to create client endpoint")?;
 
