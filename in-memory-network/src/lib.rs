@@ -206,7 +206,7 @@ impl AsyncUdpSocket for InMemorySocketHandle {
                 let next_read = inbound.time_of_next_receive();
                 let waker = cx.waker().clone();
                 tokio::task::spawn(async move {
-                    tokio::time::sleep_until(next_read.into()).await;
+                    tokio::time::sleep_until(next_read).await;
                     waker.wake();
                 });
             }
