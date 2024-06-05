@@ -1,6 +1,8 @@
 mod no_cc;
+mod no_cid;
 
 use crate::no_cc::NoCCConfig;
+use crate::no_cid::NoConnectionIdGenerator;
 use anyhow::{anyhow, Context};
 use clap::Parser;
 use in_memory_network::{InMemoryNetwork, PcapExporter, SERVER_ADDR};
@@ -25,8 +27,8 @@ struct Opt {
     #[arg(long, default_value_t = 10)]
     repeat: u32,
 
-    /// The delay on outgoing packets, in seconds
-    #[arg(long, default_value_t = 5)]
+    /// The delay on outgoing packets, in milliseconds
+    #[arg(long, default_value_t = 5000)]
     delay: u64,
 
     /// The bandwidth of the simulated link, in bytes
@@ -48,11 +50,16 @@ fn main() -> anyhow::Result<()> {
         .build()
         .expect("failed to initialize tokio");
 
-    rt.block_on(run(&opt))?;
-    Ok(())
+    let pcap_exporter = Arc::new(PcapExporter::new());
+    let result = rt.block_on(run(&opt, pcap_exporter.clone()));
+
+    // Always save export, regardless of success / failure
+    pcap_exporter.save("capture.pcap".as_ref());
+
+    result
 }
 
-async fn run(options: &Opt) -> anyhow::Result<()> {
+async fn run(options: &Opt, pcap_exporter: Arc<PcapExporter>) -> anyhow::Result<()> {
     // Certificates
     let server_name = "server-name";
     let cert = rcgen::generate_simple_self_signed(vec![server_name.into()]).unwrap();
@@ -60,8 +67,7 @@ async fn run(options: &Opt) -> anyhow::Result<()> {
     let cert = CertificateDer::from(cert.cert);
 
     // Network
-    let pcap_exporter = Arc::new(PcapExporter::new());
-    let simulated_link_delay = Duration::from_secs(options.delay);
+    let simulated_link_delay = Duration::from_millis(options.delay);
     let simulated_link_capacity = options.bandwidth;
     let packet_loss_ratio = options.loss;
     let network = Arc::new(InMemoryNetwork::initialize(
@@ -113,8 +119,6 @@ async fn run(options: &Opt) -> anyhow::Result<()> {
         start.elapsed().as_secs_f64()
     );
 
-    pcap_exporter.save("capture.pcap".as_ref());
-
     Ok(())
 }
 
@@ -152,7 +156,7 @@ fn server_endpoint(
     let mut server_config = quinn::ServerConfig::with_single_cert(vec![cert], key).unwrap();
     server_config.transport = Arc::new(transport_config(options));
     Endpoint::new_with_abstract_socket_and_rng_seed(
-        EndpointConfig::default(),
+        endpoint_config(),
         Some(server_config),
         Arc::new(network.server_socket()),
         quinn::default_runtime().unwrap(),
@@ -167,7 +171,7 @@ fn client_endpoint(
     options: &Opt,
 ) -> anyhow::Result<Endpoint> {
     let mut endpoint = Endpoint::new_with_abstract_socket_and_rng_seed(
-        EndpointConfig::default(),
+        endpoint_config(),
         None,
         Arc::new(network.client_socket()),
         quinn::default_runtime().unwrap(),
@@ -178,6 +182,12 @@ fn client_endpoint(
     endpoint.set_default_client_config(client_config(server_cert, options)?);
 
     Ok(endpoint)
+}
+
+fn endpoint_config() -> EndpointConfig {
+    let mut config = EndpointConfig::default();
+    config.cid_generator(|| Box::new(NoConnectionIdGenerator));
+    config
 }
 
 fn client_config(server_cert: CertificateDer<'_>, options: &Opt) -> anyhow::Result<ClientConfig> {
