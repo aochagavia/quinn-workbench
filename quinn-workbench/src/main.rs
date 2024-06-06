@@ -87,11 +87,6 @@ fn find_hangs(opt: Opt) -> anyhow::Result<()> {
         opt.packet_loss_rng_seed = rng.u64(..);
 
         println!("---\n---New run\n---");
-        println!(
-            "Quinn seed: {}; packet seed: {}",
-            opt.quinn_rng_seed, opt.packet_loss_rng_seed
-        );
-
         let pcap_exporter = Arc::new(PcapExporter::new());
 
         let pcap_exporter_clone = pcap_exporter.clone();
@@ -128,6 +123,11 @@ fn find_hangs(opt: Opt) -> anyhow::Result<()> {
 }
 
 async fn run(options: &Opt, pcap_exporter: Arc<PcapExporter>) -> anyhow::Result<()> {
+    println!(
+        "Quinn seed: {}; packet loss seed: {}",
+        options.quinn_rng_seed, options.packet_loss_rng_seed
+    );
+
     let mut quinn_rng = Rng::with_seed(options.quinn_rng_seed);
     let mut packet_loss_rng = Rng::with_seed(options.packet_loss_rng_seed);
 
