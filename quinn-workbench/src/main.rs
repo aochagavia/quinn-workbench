@@ -40,6 +40,34 @@ struct Opt {
     #[arg(long, default_value_t = 0.05)]
     loss: f64,
 
+    /// Initial RTT in ms
+    #[arg(long, default_value_t = 100000000)]
+    initial_rtt: u64,
+
+    /// Packet Threshold
+    #[arg(long, default_value_t = u32::MAX)]
+    packet_threshold: u32,
+
+    /// Buffer size
+    #[arg(long, default_value_t = usize::MAX)]
+    buffer_size: usize,
+
+    /// MTU Discovery
+    #[arg(long, default_value_t = false)]
+    mtu_discovery: bool,
+
+    /// Almost no congestion control
+    #[arg(long, default_value_t = true)]
+    no_cc: bool,
+
+    /// Maximum Idle Timeout
+    #[arg(long, default_value_t = 1000000000)]
+    maximum_idle_timeout: u64,
+
+    /// Send Window Size
+    #[arg(long, default_value_t = u64::MAX)]
+    send_window_size: u64,
+
     /// Quinn's random seed, which you can control to generate deterministic results
     #[arg(long, default_value_t = 0)]
     quinn_rng_seed: u64,
@@ -304,26 +332,28 @@ fn client_config(server_cert: CertificateDer<'_>, options: &Opt) -> anyhow::Resu
 
 fn transport_config(options: &Opt) -> TransportConfig {
     let mut config = TransportConfig::default();
-    config.mtu_discovery_config(None);
 
     if options.dtn {
         // DTN stuff
+        if !options.mtu_discovery { config.mtu_discovery_config(None); }
         config.max_idle_timeout(Some(
-            Duration::from_millis(options.delay * 20)
+            Duration::from_millis(options.maximum_idle_timeout)
                 .try_into()
                 .unwrap(),
         ));
         config.receive_window(VarInt::MAX);
-        config.datagram_send_buffer_size(usize::MAX);
-        config.send_window(u64::MAX);
-        config.datagram_receive_buffer_size(Some(usize::MAX));
+        config.datagram_send_buffer_size(options.buffer_size);
+        config.send_window(options.send_window_size);
+        config.datagram_receive_buffer_size(Some(options.buffer_size));
         config.stream_receive_window(VarInt::MAX);
-        config.congestion_controller_factory(Arc::new(NoCCConfig::default()));
+        if options.no_cc {
+            config.congestion_controller_factory(Arc::new(NoCCConfig::default()));
+        }
         let mut ack_frequency_config = AckFrequencyConfig::default();
         ack_frequency_config.max_ack_delay(Some(Duration::MAX));
         config.ack_frequency_config(Some(ack_frequency_config));
-        config.packet_threshold(u32::MAX);
-        config.initial_rtt(Duration::from_secs(100000));
+        config.packet_threshold(options.packet_threshold);
+        config.initial_rtt(Duration::from_millis(options.initial_rtt));
     }
     config
 }
