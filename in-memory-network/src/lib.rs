@@ -27,6 +27,7 @@ pub const CLIENT_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 
 pub struct PcapExporter {
     capture_start: Instant,
     writer: Mutex<PcapWriter<Vec<u8>>>,
+    packet_count: u64,
 }
 
 impl PcapExporter {
@@ -46,6 +47,7 @@ impl PcapExporter {
         Self {
             capture_start: Instant::now(),
             writer: Mutex::new(writer),
+            packet_count: 0,
         }
     }
 
@@ -55,9 +57,10 @@ impl PcapExporter {
         let writer = std::mem::replace(&mut *writer, dummy_writer);
         let bytes = writer.into_writer();
         std::fs::write(path, bytes).unwrap();
+        println!("total packets in pcap: {}", self.packet_count);
     }
 
-    fn track_packet(&self, now: Instant, transmit: &Transmit, source_addr: &SocketAddr) {
+    fn track_packet(&mut self, now: Instant, transmit: &Transmit, source_addr: &SocketAddr) {
         let IpAddr::V4(source) = source_addr.ip() else {
             unreachable!()
         };
@@ -105,6 +108,7 @@ impl PcapExporter {
 
         let ip_packet = buffer[0..ip_packet_length as usize].to_vec();
 
+        self.packet_count += 1;
         let mut writer = self.writer.lock().unwrap();
         writer
             .write_packet(&PcapPacket {
