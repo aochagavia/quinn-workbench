@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = { workspace = true }
+fastrand = { workspace = true }
 in-memory-network = { path = "../in-memory-network" }
 quinn = { workspace = true }
 quinn-proto = { workspace = true }

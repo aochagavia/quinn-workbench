@@ -5,6 +5,7 @@ use crate::no_cc::NoCCConfig;
 use crate::no_cid::NoConnectionIdGenerator;
 use anyhow::{anyhow, Context};
 use clap::Parser;
+use fastrand::Rng;
 use in_memory_network::{InMemoryNetwork, PcapExporter, SERVER_ADDR};
 use quinn::crypto::rustls::QuicClientConfig;
 use quinn::rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -16,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 struct Opt {
     /// Sets many transport config parameters to very large values (such as ::MAX) to handle
     /// deep space usage, where delays and disruptions can be in order of minutes, hours, days
@@ -38,28 +39,98 @@ struct Opt {
     /// The ratio of packet loss (e.g. 0.1 = 10% packet loss)
     #[arg(long, default_value_t = 0.05)]
     loss: f64,
+
+    /// Quinn's random seed, which you can control to generate deterministic results
+    #[arg(long, default_value_t = 0)]
+    quinn_rng_seed: u64,
+
+    /// The random seed used for packet loss, which you can control to generate deterministic
+    /// results
+    #[arg(long, default_value_t = 42)]
+    packet_loss_rng_seed: u64,
+
+    /// Ignore any provided random seeds and try many of them in succession, attempting to find a
+    /// combination that causes the application to hang
+    #[arg(long)]
+    find_hangs: bool,
 }
 
 fn main() -> anyhow::Result<()> {
     std::env::set_var("SSLKEYLOGFILE", "keylog.key");
     let opt = Opt::parse();
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .start_paused(true)
-        .build()
-        .expect("failed to initialize tokio");
+    if opt.find_hangs {
+        find_hangs(opt)
+    } else {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build()
+            .expect("failed to initialize tokio");
 
-    let pcap_exporter = Arc::new(PcapExporter::new());
-    let result = rt.block_on(run(&opt, pcap_exporter.clone()));
+        let pcap_exporter = Arc::new(PcapExporter::new());
+        let result = rt.block_on(run(&opt, pcap_exporter.clone()));
 
-    // Always save export, regardless of success / failure
-    pcap_exporter.save("capture.pcap".as_ref());
+        // Always save export, regardless of success / failure
+        pcap_exporter.save("capture.pcap".as_ref());
 
-    result
+        result
+    }
+}
+
+fn find_hangs(opt: Opt) -> anyhow::Result<()> {
+    let start = Instant::now();
+    let mut rng = Rng::new();
+    loop {
+        let mut opt = opt.clone();
+        opt.quinn_rng_seed = rng.u64(..);
+        opt.packet_loss_rng_seed = rng.u64(..);
+
+        println!("---\n---New run\n---");
+        println!(
+            "Quinn seed: {}; packet seed: {}",
+            opt.quinn_rng_seed, opt.packet_loss_rng_seed
+        );
+
+        let pcap_exporter = Arc::new(PcapExporter::new());
+
+        let pcap_exporter_clone = pcap_exporter.clone();
+        let thread = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .start_paused(true)
+                .build()
+                .expect("failed to initialize tokio");
+
+            rt.block_on(run(&opt, pcap_exporter))
+        });
+
+        std::thread::sleep(Duration::from_millis(200));
+        if !thread.is_finished() {
+            std::thread::sleep(Duration::from_millis(1500));
+            if !thread.is_finished() {
+                panic!("Got stuck");
+                // break Ok(());
+                // continue;
+            }
+        }
+
+        if thread.join().unwrap().is_err() {
+            pcap_exporter_clone.save("capture.pcap".as_ref());
+            break Ok(());
+        }
+
+        if start.elapsed() > Duration::from_secs(60) {
+            println!("No hangs found after 60 seconds");
+            break Ok(());
+        }
+    }
 }
 
 async fn run(options: &Opt, pcap_exporter: Arc<PcapExporter>) -> anyhow::Result<()> {
+    let mut quinn_rng = Rng::with_seed(options.quinn_rng_seed);
+    let mut packet_loss_rng = Rng::with_seed(options.packet_loss_rng_seed);
+
     // Certificates
     let server_name = "server-name";
     let cert = rcgen::generate_simple_self_signed(vec![server_name.into()]).unwrap();
@@ -78,11 +149,18 @@ async fn run(options: &Opt, pcap_exporter: Arc<PcapExporter>) -> anyhow::Result<
     ));
 
     // Let a server listen in the background
-    let server = server_endpoint(cert.clone(), key.into(), network.clone(), options)?;
+    let server = server_endpoint(
+        cert.clone(),
+        key.into(),
+        network.clone(),
+        options,
+        &mut quinn_rng,
+        &mut packet_loss_rng,
+    )?;
     let server_task = tokio::spawn(server_listen(server));
 
     // Make repeated requests
-    let client = client_endpoint(cert, network, options)?;
+    let client = client_endpoint(cert, network, options, &mut quinn_rng, &mut packet_loss_rng)?;
     let start = Instant::now();
     println!("0.00s CONNECT");
     let connection = client.connect(SERVER_ADDR, server_name)?.await?;
@@ -152,15 +230,20 @@ fn server_endpoint(
     key: PrivateKeyDer<'static>,
     network: Arc<InMemoryNetwork>,
     options: &Opt,
+    quinn_rng: &mut Rng,
+    packet_loss_rng: &mut Rng,
 ) -> anyhow::Result<Endpoint> {
+    let mut seed = [0; 32];
+    quinn_rng.fill(&mut seed);
+
     let mut server_config = quinn::ServerConfig::with_single_cert(vec![cert], key).unwrap();
     server_config.transport = Arc::new(transport_config(options));
     Endpoint::new_with_abstract_socket_and_rng_seed(
         endpoint_config(),
         Some(server_config),
-        Arc::new(network.server_socket()),
+        Arc::new(network.server_socket(packet_loss_rng)),
         quinn::default_runtime().unwrap(),
-        [0; 32],
+        seed,
     )
     .context("failed to create server endpoint")
 }
@@ -169,13 +252,18 @@ fn client_endpoint(
     server_cert: CertificateDer<'_>,
     network: Arc<InMemoryNetwork>,
     options: &Opt,
+    quinn_rng: &mut Rng,
+    packet_loss_rng: &mut Rng,
 ) -> anyhow::Result<Endpoint> {
+    let mut seed = [0; 32];
+    quinn_rng.fill(&mut seed);
+
     let mut endpoint = Endpoint::new_with_abstract_socket_and_rng_seed(
         endpoint_config(),
         None,
-        Arc::new(network.client_socket()),
+        Arc::new(network.client_socket(packet_loss_rng)),
         quinn::default_runtime().unwrap(),
-        [0; 32],
+        seed,
     )
     .context("failed to create client endpoint")?;
 
@@ -220,7 +308,11 @@ fn transport_config(options: &Opt) -> TransportConfig {
 
     if options.dtn {
         // DTN stuff
-        config.max_idle_timeout(Some(VarInt::MAX.into()));
+        config.max_idle_timeout(Some(
+            Duration::from_millis(options.delay * 20)
+                .try_into()
+                .unwrap(),
+        ));
         config.receive_window(VarInt::MAX);
         config.datagram_send_buffer_size(usize::MAX);
         config.send_window(u64::MAX);

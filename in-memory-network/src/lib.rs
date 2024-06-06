@@ -331,22 +331,22 @@ impl InMemoryNetwork {
     }
 
     /// Returns a handle to the server's socket
-    pub fn server_socket(self: Arc<InMemoryNetwork>) -> InMemorySocketHandle {
+    pub fn server_socket(self: Arc<InMemoryNetwork>, rng: &mut Rng) -> InMemorySocketHandle {
         InMemorySocketHandle {
             addr: self.sockets[0].addr,
             packet_loss_ratio: self.packet_loss_ratio,
-            rng: Mutex::new(Rng::with_seed(42)),
+            rng: Mutex::new(Rng::with_seed(rng.u64(..))),
             network: self.clone(),
             pcap_exporter: self.pcap_exporter.clone(),
         }
     }
 
     /// Returns a handle to the client's socket
-    pub fn client_socket(self: Arc<InMemoryNetwork>) -> InMemorySocketHandle {
+    pub fn client_socket(self: Arc<InMemoryNetwork>, rng: &mut Rng) -> InMemorySocketHandle {
         InMemorySocketHandle {
             addr: self.sockets[1].addr,
             packet_loss_ratio: self.packet_loss_ratio,
-            rng: Mutex::new(Rng::with_seed(55)),
+            rng: Mutex::new(Rng::with_seed(rng.u64(..))),
             network: self.clone(),
             pcap_exporter: self.pcap_exporter.clone(),
         }
