@@ -52,16 +52,16 @@ struct Opt {
     #[arg(long, default_value_t = usize::MAX)]
     buffer_size: usize,
 
-    /// MTU Discovery
+    /// MTU Discovery: default false
     #[arg(long, default_value_t = false)]
     mtu_discovery: bool,
 
-    /// Almost no congestion control
+    /// Almost no congestion control: default true
     #[arg(long, default_value_t = true)]
     no_cc: bool,
 
-    /// Maximum Idle Timeout
-    #[arg(long, default_value_t = 1000000000)]
+    /// Maximum Idle Timeout in ms
+    #[arg(long, default_value_t = 100000000000)]
     maximum_idle_timeout: u64,
 
     /// Send Window Size
