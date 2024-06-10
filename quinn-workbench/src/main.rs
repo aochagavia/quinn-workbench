@@ -51,6 +51,11 @@ struct Opt {
     #[arg(long, default_value_t = 10)]
     repeat: u32,
 
+    /// Whether the run should be non-deterministic, i.e. using a non-constant seed for the random
+    /// number generators
+    #[arg(long)]
+    non_deterministic: bool,
+
     /// Quinn's random seed, which you can control to generate deterministic results
     #[arg(long, default_value_t = 0)]
     quinn_rng_seed: u64,
@@ -168,8 +173,14 @@ async fn run(
     let simulated_link_delay = Duration::from_millis(network_config.delay_ms);
 
     println!("--- Params ---");
-    println!("* Quinn seed: {}", options.quinn_rng_seed);
-    println!("* Packet loss seed: {}", options.packet_loss_rng_seed);
+    let (quinn_rng_seed, packet_loss_rng_seed) = if options.non_deterministic {
+        let mut rng = Rng::new();
+        (rng.u64(..), rng.u64(..))
+    } else {
+        (options.quinn_rng_seed, options.packet_loss_rng_seed)
+    };
+    println!("* Quinn seed: {}", quinn_rng_seed);
+    println!("* Packet loss seed: {}", packet_loss_rng_seed);
     if let Some(path) = &options.config {
         println!("* Transport config path: {}", path.display());
     }
@@ -183,8 +194,8 @@ async fn run(
         network_config.packet_loss_ratio * 100.0
     );
 
-    let mut quinn_rng = Rng::with_seed(options.quinn_rng_seed);
-    let mut packet_loss_rng = Rng::with_seed(options.packet_loss_rng_seed);
+    let mut quinn_rng = Rng::with_seed(quinn_rng_seed);
+    let mut packet_loss_rng = Rng::with_seed(packet_loss_rng_seed);
     let start = Instant::now();
 
     // Certificates
