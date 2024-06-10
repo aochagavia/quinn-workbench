@@ -7,7 +7,7 @@ use pnet_packet::udp;
 use pnet_packet::udp::MutableUdpPacket;
 use pnet_packet::{ipv4, PacketSize};
 use queue::InboundQueue;
-use quinn::udp::{RecvMeta, Transmit};
+use quinn::udp::{EcnCodepoint, RecvMeta, Transmit};
 use quinn::{AsyncUdpSocket, UdpPoller};
 use std::collections::VecDeque;
 use std::io::IoSliceMut;
@@ -22,6 +22,62 @@ use tokio::time::Instant;
 pub const SERVER_ADDR: SocketAddr =
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(88, 88, 88, 88)), 8080);
 pub const CLIENT_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 8080);
+
+#[derive(Clone, Debug)]
+struct NetworkStatsTracker {
+    inner: Arc<Mutex<NetworkStatsInner>>,
+}
+
+#[derive(Debug, Default)]
+struct NetworkStatsInner {
+    transmits_metadata: Vec<TransmitMetadata>,
+}
+
+#[derive(Debug)]
+struct TransmitMetadata {
+    source: SocketAddr,
+    byte_size: usize,
+    dropped: bool,
+}
+
+impl NetworkStatsTracker {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(NetworkStatsInner::default())),
+        }
+    }
+
+    fn track_sent(&self, source: SocketAddr, size: usize) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.transmits_metadata.push(TransmitMetadata {
+            source,
+            byte_size: size,
+            dropped: false,
+        });
+    }
+
+    fn track_dropped(&self, source: SocketAddr, size: usize) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.transmits_metadata.push(TransmitMetadata {
+            source,
+            byte_size: size,
+            dropped: true,
+        });
+    }
+}
+
+pub struct NetworkStats {
+    pub client: EndpointStats,
+    pub server: EndpointStats,
+}
+
+#[derive(Default)]
+pub struct EndpointStats {
+    pub sent_packets: usize,
+    pub dropped_packets: usize,
+    pub sent_bytes: usize,
+    pub dropped_bytes: usize,
+}
 
 #[derive(Debug)]
 pub struct PcapExporter {
@@ -57,7 +113,7 @@ impl PcapExporter {
         std::fs::write(path, bytes).unwrap();
     }
 
-    fn track_packet(&self, now: Instant, transmit: &Transmit, source_addr: &SocketAddr) {
+    fn track_packet(&self, now: Instant, transmit: &OwnedTransmit, source_addr: &SocketAddr) {
         let IpAddr::V4(source) = source_addr.ip() else {
             unreachable!()
         };
@@ -65,8 +121,6 @@ impl PcapExporter {
         let IpAddr::V4(destination) = transmit.destination.ip() else {
             unreachable!()
         };
-
-        // Rewrite the addresses, so it's easier to view them in Wireshark
 
         let mut buffer = vec![0; 2000];
 
@@ -76,7 +130,7 @@ impl PcapExporter {
         udp_writer.set_source(source_addr.port());
         udp_writer.set_destination(transmit.destination.port());
         udp_writer.set_length(udp_packet_length);
-        udp_writer.set_payload(transmit.contents);
+        udp_writer.set_payload(&transmit.contents);
         let checksum = udp::ipv4_checksum(&udp_writer.to_immutable(), &source, &destination);
         udp_writer.set_checksum(checksum);
         drop(udp_writer);
@@ -132,6 +186,8 @@ pub struct InMemorySocketHandle {
     rng: Mutex<Rng>,
     packet_loss_ratio: f64,
     pcap_exporter: Arc<PcapExporter>,
+    stats: NetworkStatsTracker,
+    start: Instant,
 }
 
 impl AsyncUdpSocket for InMemorySocketHandle {
@@ -143,23 +199,36 @@ impl AsyncUdpSocket for InMemorySocketHandle {
         {
             let roll = self.rng.lock().unwrap().f64();
             if roll < self.packet_loss_ratio {
-                println!("Packet lost!");
+                let source = match self.addr {
+                    CLIENT_ADDR => "Client",
+                    SERVER_ADDR => "Server",
+                    _ => unreachable!(),
+                };
+
+                println!(
+                    "{:.2}s {source} packet lost!",
+                    self.start.elapsed().as_secs_f64()
+                );
+                self.stats.track_dropped(self.addr, transmit.contents.len());
                 return Ok(());
             }
         }
 
+        // We don't have code to handle GSO, so let's ensure transmits are always a single UDP
+        // packet
+        assert!(transmit.segment_size.is_none());
+
         let now = Instant::now();
-        let transmit = Transmit {
+        let transmit = OwnedTransmit {
             destination: transmit.destination,
             ecn: transmit.ecn,
-            // TODO: don't leak
-            contents: transmit.contents.to_vec().leak(),
-            src_ip: Some(self.addr.ip()),
+            contents: transmit.contents.to_vec(),
             segment_size: transmit.segment_size,
         };
 
         // Track in the pcap capture
         self.pcap_exporter.track_packet(now, &transmit, &self.addr);
+        self.stats.track_sent(self.addr, transmit.contents.len());
 
         // Actually send it
         self.network.send(now, self.addr, transmit);
@@ -191,7 +260,7 @@ impl AsyncUdpSocket for InMemorySocketHandle {
             meta.stride = transmit.segment_size.unwrap_or(meta.len);
 
             // Buffer
-            buf[..transmit.contents.len()].copy_from_slice(transmit.contents);
+            buf[..transmit.contents.len()].copy_from_slice(&transmit.contents);
         }
 
         if received == 0 {
@@ -304,7 +373,9 @@ mod queue {
 pub struct InMemoryNetwork {
     pub sockets: Vec<InMemorySocket>,
     pcap_exporter: Arc<PcapExporter>,
+    stats_tracker: NetworkStatsTracker,
     packet_loss_ratio: f64,
+    start: Instant,
 }
 
 impl InMemoryNetwork {
@@ -316,6 +387,7 @@ impl InMemoryNetwork {
         link_capacity: usize,
         packet_loss_ratio: f64,
         pcap_exporter: Arc<PcapExporter>,
+        start: Instant,
     ) -> Self {
         let server_addr = SERVER_ADDR;
         let client_addr = CLIENT_ADDR;
@@ -326,7 +398,9 @@ impl InMemoryNetwork {
                 InMemorySocket::new(client_addr, link_delay, link_capacity),
             ],
             pcap_exporter,
+            stats_tracker: NetworkStatsTracker::new(),
             packet_loss_ratio,
+            start,
         }
     }
 
@@ -337,7 +411,9 @@ impl InMemoryNetwork {
             packet_loss_ratio: self.packet_loss_ratio,
             rng: Mutex::new(Rng::with_seed(rng.u64(..))),
             network: self.clone(),
+            stats: self.stats_tracker.clone(),
             pcap_exporter: self.pcap_exporter.clone(),
+            start: self.start,
         }
     }
 
@@ -348,7 +424,9 @@ impl InMemoryNetwork {
             packet_loss_ratio: self.packet_loss_ratio,
             rng: Mutex::new(Rng::with_seed(rng.u64(..))),
             network: self.clone(),
+            stats: self.stats_tracker.clone(),
             pcap_exporter: self.pcap_exporter.clone(),
+            start: self.start,
         }
     }
 
@@ -361,8 +439,8 @@ impl InMemoryNetwork {
             .expect("socket does not exist")
     }
 
-    /// Sends a [`Transmit`] to its destination
-    fn send(&self, now: Instant, source_addr: SocketAddr, transmit: Transmit<'static>) {
+    /// Sends an [`OwnedTransmit`] to its destination
+    fn send(&self, now: Instant, source_addr: SocketAddr, transmit: OwnedTransmit) {
         let socket = self.socket(transmit.destination);
         let sent = socket.inbound.lock().unwrap().send(InTransitData {
             source_addr,
@@ -378,12 +456,55 @@ impl InMemoryNetwork {
             }
         }
     }
+
+    pub fn stats(&self) -> NetworkStats {
+        let stats_tracker = self.stats_tracker.inner.lock().unwrap();
+
+        let mut client = EndpointStats::default();
+        let mut server = EndpointStats::default();
+
+        for metadata in &stats_tracker.transmits_metadata {
+            match (metadata.source, metadata.dropped) {
+                (CLIENT_ADDR, true) => {
+                    client.dropped_packets += 1;
+                    client.dropped_bytes += metadata.byte_size;
+                }
+                (CLIENT_ADDR, false) => {
+                    client.sent_packets += 1;
+                    client.sent_bytes += metadata.byte_size;
+                }
+                (SERVER_ADDR, false) => {
+                    server.sent_packets += 1;
+                    server.sent_bytes += metadata.byte_size;
+                }
+                (SERVER_ADDR, true) => {
+                    server.dropped_packets += 1;
+                    server.dropped_bytes += metadata.byte_size;
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        NetworkStats { client, server }
+    }
+}
+
+#[derive(Debug)]
+struct OwnedTransmit {
+    /// The socket this datagram should be sent to
+    pub destination: SocketAddr,
+    /// Explicit congestion notification bits to set on the packet
+    pub ecn: Option<EcnCodepoint>,
+    /// Contents of the datagram
+    pub contents: Vec<u8>,
+    /// The segment size if this transmission contains multiple datagrams.
+    /// This is `None` if the transmit only contains a single datagram
+    pub segment_size: Option<usize>,
 }
 
 #[derive(Debug)]
 struct InTransitData {
     source_addr: SocketAddr,
-    // TODO: use a parametric lifetime bound, instead of requiring the user to leak memory
-    transmit: Transmit<'static>,
+    transmit: OwnedTransmit,
     sent: Instant,
 }
