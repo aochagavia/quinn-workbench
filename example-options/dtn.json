@@ -1,0 +1,18 @@
+{
+  "quinn": {
+    "initial_rtt_ms": 100000000,
+    "maximum_idle_timeout_ms": 100000000000,
+    "packet_threshold": 4294967295,
+    "mtu_discovery": false,
+    "disable_congestion_control": true,
+    "send_window_size": 18446744073709551615,
+    "maximize_send_and_receive_windows": true,
+    "max_ack_delay_ms": 18446744073709551615,
+    "ack_eliciting_threshold": 10
+  },
+  "network": {
+    "delay_ms": 5000,
+    "packet_loss_ratio": 0.05,
+    "bandwidth": 18446744073709551615
+  }
+}

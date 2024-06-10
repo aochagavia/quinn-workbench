@@ -13,32 +13,43 @@ use quinn::rustls::RootCertStore;
 use quinn::{ClientConfig, Endpoint, EndpointConfig, TransportConfig, VarInt};
 use quinn_proto::AckFrequencyConfig;
 use rustls::pki_types::PrivatePkcs8KeyDer;
+use serde::Deserialize;
+use std::fs::File;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
 
+#[derive(Deserialize)]
+struct JsonConfig {
+    quinn: QuinnJsonConfig,
+    network: NetworkJsonConfig,
+}
+
+#[derive(Deserialize)]
+struct QuinnJsonConfig {
+    initial_rtt_ms: u64,
+    maximum_idle_timeout_ms: u64,
+    packet_threshold: u32,
+    mtu_discovery: bool,
+    disable_congestion_control: bool,
+    maximize_send_and_receive_windows: bool,
+    ack_eliciting_threshold: u32,
+    max_ack_delay_ms: u64,
+}
+
+#[derive(Clone, Deserialize)]
+struct NetworkJsonConfig {
+    delay_ms: u64,
+    packet_loss_ratio: f64,
+    bandwidth: u64,
+}
+
 #[derive(Parser, Debug, Clone)]
 struct Opt {
-    /// Sets many transport config parameters to very large values (such as ::MAX) to handle
-    /// deep space usage, where delays and disruptions can be in order of minutes, hours, days
-    #[arg(long)]
-    dtn: bool,
-
     /// The amount of times the http request should be repeated
     #[arg(long, default_value_t = 10)]
     repeat: u32,
-
-    /// The delay on outgoing packets, in milliseconds
-    #[arg(long, default_value_t = 5000)]
-    delay: u64,
-
-    /// The bandwidth of the simulated link, in bytes
-    #[arg(long, default_value_t = usize::MAX)]
-    bandwidth: usize,
-
-    /// The ratio of packet loss (e.g. 0.1 = 10% packet loss)
-    #[arg(long, default_value_t = 0.05)]
-    loss: f64,
 
     /// Quinn's random seed, which you can control to generate deterministic results
     #[arg(long, default_value_t = 0)]
@@ -53,11 +64,16 @@ struct Opt {
     /// combination that causes the application to hang
     #[arg(long)]
     find_hangs: bool,
+
+    /// Path to the JSON file containing the desired transport config
+    #[arg(long)]
+    config: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
     std::env::set_var("SSLKEYLOGFILE", "keylog.key");
     let opt = Opt::parse();
+    let json_config = load_json_config(opt.config.as_deref())?;
 
     if opt.find_hangs {
         find_hangs(opt)
@@ -69,13 +85,23 @@ fn main() -> anyhow::Result<()> {
             .expect("failed to initialize tokio");
 
         let pcap_exporter = Arc::new(PcapExporter::new());
-        let result = rt.block_on(run(&opt, pcap_exporter.clone()));
+        let result = rt.block_on(run(&opt, json_config, pcap_exporter.clone()));
 
         // Always save export, regardless of success / failure
         pcap_exporter.save("capture.pcap".as_ref());
 
         result
     }
+}
+
+fn load_json_config(path: Option<&Path>) -> anyhow::Result<Option<JsonConfig>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+
+    let file = File::open(path).context("unable to open config JSON file for loading")?;
+    let parsed = serde_json::from_reader(file).context("error parsing JSON config")?;
+    Ok(Some(parsed))
 }
 
 fn find_hangs(opt: Opt) -> anyhow::Result<()> {
@@ -85,6 +111,7 @@ fn find_hangs(opt: Opt) -> anyhow::Result<()> {
         let mut opt = opt.clone();
         opt.quinn_rng_seed = rng.u64(..);
         opt.packet_loss_rng_seed = rng.u64(..);
+        let json_config = load_json_config(opt.config.as_deref())?;
 
         println!("---\n---New run\n---");
         let pcap_exporter = Arc::new(PcapExporter::new());
@@ -97,7 +124,7 @@ fn find_hangs(opt: Opt) -> anyhow::Result<()> {
                 .build()
                 .expect("failed to initialize tokio");
 
-            rt.block_on(run(&opt, pcap_exporter))
+            rt.block_on(run(&opt, json_config, pcap_exporter))
         });
 
         std::thread::sleep(Duration::from_millis(200));
@@ -122,19 +149,39 @@ fn find_hangs(opt: Opt) -> anyhow::Result<()> {
     }
 }
 
-async fn run(options: &Opt, pcap_exporter: Arc<PcapExporter>) -> anyhow::Result<()> {
-    let simulated_link_delay = Duration::from_millis(options.delay);
+async fn run(
+    options: &Opt,
+    config: Option<JsonConfig>,
+    pcap_exporter: Arc<PcapExporter>,
+) -> anyhow::Result<()> {
+    let network_config = config
+        .as_ref()
+        .map(|c| c.network.clone())
+        .unwrap_or(NetworkJsonConfig {
+            delay_ms: 5_000,
+            packet_loss_ratio: 0.05,
+            bandwidth: u64::MAX,
+        });
+
+    let quinn_config = config.as_ref().map(|c| &c.quinn);
+
+    let simulated_link_delay = Duration::from_millis(network_config.delay_ms);
 
     println!("--- Params ---");
     println!("* Quinn seed: {}", options.quinn_rng_seed);
     println!("* Packet loss seed: {}", options.packet_loss_rng_seed);
-    println!("* DTN mode: {}", options.dtn);
+    if let Some(path) = &options.config {
+        println!("* Transport config path: {}", path.display());
+    }
     println!(
         "* Delay: {:.2}s ({:.2}s RTT)",
         simulated_link_delay.as_secs_f64(),
         simulated_link_delay.as_secs_f64() * 2.0
     );
-    println!("* Packet loss ratio: {:.2}%", options.loss * 100.0);
+    println!(
+        "* Packet loss ratio: {:.2}%",
+        network_config.packet_loss_ratio * 100.0
+    );
 
     let mut quinn_rng = Rng::with_seed(options.quinn_rng_seed);
     let mut packet_loss_rng = Rng::with_seed(options.packet_loss_rng_seed);
@@ -147,12 +194,10 @@ async fn run(options: &Opt, pcap_exporter: Arc<PcapExporter>) -> anyhow::Result<
     let cert = CertificateDer::from(cert.cert);
 
     // Network
-    let simulated_link_capacity = options.bandwidth;
-    let packet_loss_ratio = options.loss;
     let network = Arc::new(InMemoryNetwork::initialize(
         simulated_link_delay,
-        simulated_link_capacity,
-        packet_loss_ratio,
+        network_config.bandwidth,
+        network_config.packet_loss_ratio,
         pcap_exporter.clone(),
         start,
     ));
@@ -162,7 +207,7 @@ async fn run(options: &Opt, pcap_exporter: Arc<PcapExporter>) -> anyhow::Result<
         cert.clone(),
         key.into(),
         network.clone(),
-        options,
+        quinn_config,
         &mut quinn_rng,
         &mut packet_loss_rng,
     )?;
@@ -173,7 +218,7 @@ async fn run(options: &Opt, pcap_exporter: Arc<PcapExporter>) -> anyhow::Result<
     let client = client_endpoint(
         cert,
         network.clone(),
-        options,
+        quinn_config,
         &mut quinn_rng,
         &mut packet_loss_rng,
     )?;
@@ -207,18 +252,15 @@ async fn run(options: &Opt, pcap_exporter: Arc<PcapExporter>) -> anyhow::Result<
         .context("server task crashed")?
         .context("server task errored")?;
 
-    let total_time = start.elapsed().as_secs_f64();
-    println!(
-        "{:.2}s Connection closed",
-        total_time
-    );
+    let total_time_sec = start.elapsed().as_secs_f64();
+    println!("{:.2}s Connection closed", total_time_sec);
 
-    let rtt = (options.delay as f64 / 1000.0) * 2.0;
+    let rtt_sec = simulated_link_delay.as_secs_f64() * 2.0;
     println!("--- Stats ---");
     println!(
         "* Time from start to connection closed: {:.2}s ({:.2} RTT)",
-        total_time,
-        total_time / rtt,
+        total_time_sec,
+        total_time_sec / rtt_sec,
     );
 
     let stats = network.stats();
@@ -265,7 +307,7 @@ fn server_endpoint(
     cert: CertificateDer<'static>,
     key: PrivateKeyDer<'static>,
     network: Arc<InMemoryNetwork>,
-    options: &Opt,
+    quinn_config: Option<&QuinnJsonConfig>,
     quinn_rng: &mut Rng,
     packet_loss_rng: &mut Rng,
 ) -> anyhow::Result<Endpoint> {
@@ -273,7 +315,7 @@ fn server_endpoint(
     quinn_rng.fill(&mut seed);
 
     let mut server_config = quinn::ServerConfig::with_single_cert(vec![cert], key).unwrap();
-    server_config.transport = Arc::new(transport_config(options));
+    server_config.transport = Arc::new(transport_config(quinn_config));
     Endpoint::new_with_abstract_socket_and_rng_seed(
         endpoint_config(),
         Some(server_config),
@@ -287,7 +329,7 @@ fn server_endpoint(
 fn client_endpoint(
     server_cert: CertificateDer<'_>,
     network: Arc<InMemoryNetwork>,
-    options: &Opt,
+    quinn_config: Option<&QuinnJsonConfig>,
     quinn_rng: &mut Rng,
     packet_loss_rng: &mut Rng,
 ) -> anyhow::Result<Endpoint> {
@@ -303,7 +345,7 @@ fn client_endpoint(
     )
     .context("failed to create client endpoint")?;
 
-    endpoint.set_default_client_config(client_config(server_cert, options)?);
+    endpoint.set_default_client_config(client_config(server_cert, quinn_config)?);
 
     Ok(endpoint)
 }
@@ -314,7 +356,10 @@ fn endpoint_config() -> EndpointConfig {
     config
 }
 
-fn client_config(server_cert: CertificateDer<'_>, options: &Opt) -> anyhow::Result<ClientConfig> {
+fn client_config(
+    server_cert: CertificateDer<'_>,
+    quinn_config: Option<&QuinnJsonConfig>,
+) -> anyhow::Result<ClientConfig> {
     let mut roots = RootCertStore::empty();
     roots.add(server_cert)?;
 
@@ -332,34 +377,51 @@ fn client_config(server_cert: CertificateDer<'_>, options: &Opt) -> anyhow::Resu
 
     crypto.key_log = Arc::new(rustls::KeyLogFile::new());
 
-    let mut client_config = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(crypto)?));
-    client_config.transport_config(Arc::new(transport_config(options)));
+    let mut client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(crypto)?));
+    client_config.transport_config(Arc::new(transport_config(quinn_config)));
 
     Ok(client_config)
 }
 
-fn transport_config(options: &Opt) -> TransportConfig {
+fn transport_config(quinn_config: Option<&QuinnJsonConfig>) -> TransportConfig {
     let mut config = TransportConfig::default();
-    config.mtu_discovery_config(None);
 
-    if options.dtn {
-        // DTN stuff
+    if let Some(quinn_config) = quinn_config {
+        if !quinn_config.mtu_discovery {
+            config.mtu_discovery_config(None);
+        }
+
         config.max_idle_timeout(Some(
-            Duration::from_millis(options.delay * 20)
+            Duration::from_millis(quinn_config.maximum_idle_timeout_ms)
                 .try_into()
                 .unwrap(),
         ));
-        config.receive_window(VarInt::MAX);
-        config.datagram_send_buffer_size(usize::MAX);
-        config.send_window(u64::MAX);
-        config.datagram_receive_buffer_size(Some(usize::MAX));
-        config.stream_receive_window(VarInt::MAX);
-        config.congestion_controller_factory(Arc::new(NoCCConfig::default()));
+
+        if quinn_config.maximize_send_and_receive_windows {
+            config.receive_window(VarInt::MAX);
+            config.stream_receive_window(VarInt::MAX);
+            config.send_window(u64::MAX);
+        }
+
+        config.packet_threshold(quinn_config.packet_threshold);
+
+        if quinn_config.disable_congestion_control {
+            config.congestion_controller_factory(Arc::new(NoCCConfig::default()));
+        }
+
         let mut ack_frequency_config = AckFrequencyConfig::default();
-        ack_frequency_config.max_ack_delay(Some(Duration::MAX));
+        ack_frequency_config
+            .ack_eliciting_threshold(VarInt::from_u32(quinn_config.ack_eliciting_threshold));
+        ack_frequency_config
+            .max_ack_delay(Some(Duration::from_millis(quinn_config.max_ack_delay_ms)));
+
+        // The docs say the recommended value for this is `packet_threshold - 1`
+        ack_frequency_config
+            .reordering_threshold(VarInt::from_u32(quinn_config.packet_threshold - 1));
         config.ack_frequency_config(Some(ack_frequency_config));
-        config.packet_threshold(u32::MAX);
-        config.initial_rtt(Duration::from_secs(100000));
+
+        config.initial_rtt(Duration::from_millis(quinn_config.initial_rtt_ms));
     }
+
     config
 }

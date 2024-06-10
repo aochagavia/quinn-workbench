@@ -357,7 +357,7 @@ pub struct InMemorySocket {
 }
 
 impl InMemorySocket {
-    pub fn new(addr: SocketAddr, link_delay: Duration, link_capacity: usize) -> InMemorySocket {
+    pub fn new(addr: SocketAddr, link_delay: Duration, link_capacity: u64) -> InMemorySocket {
         InMemorySocket {
             addr,
             inbound: Arc::new(Mutex::new(InboundQueue::new(link_delay, link_capacity))),
@@ -378,12 +378,12 @@ mod queue {
     }
 
     impl InboundQueue {
-        pub(super) fn new(link_delay: Duration, link_capacity: usize) -> Self {
+        pub(super) fn new(link_delay: Duration, link_capacity: u64) -> Self {
             Self {
                 queue: VecDeque::new(),
                 bytes_in_transit: 0,
                 link_delay,
-                link_capacity,
+                link_capacity: link_capacity as usize,
             }
         }
 
@@ -440,7 +440,7 @@ impl InMemoryNetwork {
     /// The link capacity is measured in bytes per `link_delay`
     pub fn initialize(
         link_delay: Duration,
-        link_capacity: usize,
+        link_capacity: u64,
         packet_loss_ratio: f64,
         pcap_exporter: Arc<PcapExporter>,
         start: Instant,
