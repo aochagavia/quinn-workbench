@@ -183,7 +183,7 @@ async fn run(options: &Opt, pcap_exporter: Arc<PcapExporter>) -> anyhow::Result<
     let request_number = options.repeat;
     let request = "GET /index.html";
     for _ in 0..request_number {
-        println!("{:.02}s {request}", start.elapsed().as_secs_f64());
+        println!("{:.2}s {request}", start.elapsed().as_secs_f64());
 
         let (mut tx, mut rx) = connection.open_bi().await?;
         tx.write_all(request.as_bytes()).await?;
@@ -193,7 +193,7 @@ async fn run(options: &Opt, pcap_exporter: Arc<PcapExporter>) -> anyhow::Result<
     }
 
     println!(
-        "Done! Sent {request_number} requests in {:.02}s. Waiting for connection close...",
+        "{:.2}s Done sending {request_number} requests",
         start.elapsed().as_secs_f64()
     );
 
@@ -208,6 +208,11 @@ async fn run(options: &Opt, pcap_exporter: Arc<PcapExporter>) -> anyhow::Result<
         .context("server task errored")?;
 
     let total_time = start.elapsed().as_secs_f64();
+    println!(
+        "{:.2}s Connection closed",
+        total_time
+    );
+
     let rtt = (options.delay as f64 / 1000.0) * 2.0;
     println!("--- Stats ---");
     println!(
