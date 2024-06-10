@@ -123,13 +123,22 @@ fn find_hangs(opt: Opt) -> anyhow::Result<()> {
 }
 
 async fn run(options: &Opt, pcap_exporter: Arc<PcapExporter>) -> anyhow::Result<()> {
+    let simulated_link_delay = Duration::from_millis(options.delay);
+
+    println!("--- Params ---");
+    println!("* Quinn seed: {}", options.quinn_rng_seed);
+    println!("* Packet loss seed: {}", options.packet_loss_rng_seed);
+    println!("* DTN mode: {}", options.dtn);
     println!(
-        "Quinn seed: {}; packet loss seed: {}",
-        options.quinn_rng_seed, options.packet_loss_rng_seed
+        "* Delay: {:.2}s ({:.2}s RTT)",
+        simulated_link_delay.as_secs_f64(),
+        simulated_link_delay.as_secs_f64() * 2.0
     );
+    println!("* Packet loss ratio: {:.2}%", options.loss * 100.0);
 
     let mut quinn_rng = Rng::with_seed(options.quinn_rng_seed);
     let mut packet_loss_rng = Rng::with_seed(options.packet_loss_rng_seed);
+    let start = Instant::now();
 
     // Certificates
     let server_name = "server-name";
@@ -138,7 +147,6 @@ async fn run(options: &Opt, pcap_exporter: Arc<PcapExporter>) -> anyhow::Result<
     let cert = CertificateDer::from(cert.cert);
 
     // Network
-    let simulated_link_delay = Duration::from_millis(options.delay);
     let simulated_link_capacity = options.bandwidth;
     let packet_loss_ratio = options.loss;
     let network = Arc::new(InMemoryNetwork::initialize(
@@ -146,6 +154,7 @@ async fn run(options: &Opt, pcap_exporter: Arc<PcapExporter>) -> anyhow::Result<
         simulated_link_capacity,
         packet_loss_ratio,
         pcap_exporter.clone(),
+        start,
     ));
 
     // Let a server listen in the background
@@ -160,8 +169,14 @@ async fn run(options: &Opt, pcap_exporter: Arc<PcapExporter>) -> anyhow::Result<
     let server_task = tokio::spawn(server_listen(server));
 
     // Make repeated requests
-    let client = client_endpoint(cert, network, options, &mut quinn_rng, &mut packet_loss_rng)?;
-    let start = Instant::now();
+    println!("--- Requests ---");
+    let client = client_endpoint(
+        cert,
+        network.clone(),
+        options,
+        &mut quinn_rng,
+        &mut packet_loss_rng,
+    )?;
     println!("0.00s CONNECT");
     let connection = client.connect(SERVER_ADDR, server_name)?.await?;
 
@@ -192,10 +207,26 @@ async fn run(options: &Opt, pcap_exporter: Arc<PcapExporter>) -> anyhow::Result<
         .context("server task crashed")?
         .context("server task errored")?;
 
+    let total_time = start.elapsed().as_secs_f64();
+    let rtt = (options.delay as f64 / 1000.0) * 2.0;
+    println!("--- Stats ---");
     println!(
-        "Time from start to connection closed: {:.02}s",
-        start.elapsed().as_secs_f64()
+        "* Time from start to connection closed: {:.2}s ({:.2} RTT)",
+        total_time,
+        total_time / rtt,
     );
+
+    let stats = network.stats();
+    for (name, stats) in [("Client", stats.client), ("Server", stats.server)] {
+        println!(
+            "* {name} packets successfully sent: {} ({} bytes)",
+            stats.sent_packets, stats.sent_bytes,
+        );
+        println!(
+            "* {name} packets dropped: {} ({} bytes)",
+            stats.dropped_packets, stats.dropped_bytes
+        );
+    }
 
     Ok(())
 }
