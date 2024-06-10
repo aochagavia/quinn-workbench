@@ -1,6 +1,9 @@
 use fastrand::Rng;
-use pcap_file::pcap::{PcapHeader, PcapPacket, PcapWriter};
-use pcap_file::{DataLink, Endianness, TsResolution};
+use pcap_file::pcapng::blocks::enhanced_packet::{EnhancedPacketBlock, EnhancedPacketOption};
+use pcap_file::pcapng::blocks::interface_description::InterfaceDescriptionBlock;
+use pcap_file::pcapng::blocks::section_header::SectionHeaderBlock;
+use pcap_file::pcapng::PcapNgWriter;
+use pcap_file::{DataLink, Endianness};
 use pnet_packet::ip::IpNextHeaderProtocol;
 use pnet_packet::ipv4::MutableIpv4Packet;
 use pnet_packet::udp;
@@ -10,10 +13,12 @@ use queue::InboundQueue;
 use quinn::udp::{EcnCodepoint, RecvMeta, Transmit};
 use quinn::{AsyncUdpSocket, UdpPoller};
 use std::collections::VecDeque;
+use std::fmt::{Debug, Formatter};
 use std::io::IoSliceMut;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
@@ -79,41 +84,61 @@ pub struct EndpointStats {
     pub dropped_bytes: usize,
 }
 
-#[derive(Debug)]
 pub struct PcapExporter {
     capture_start: Instant,
-    writer: Mutex<PcapWriter<Vec<u8>>>,
+    total_tracked_packets: AtomicU64,
+    writer: Mutex<PcapNgWriter<Vec<u8>>>,
 }
 
 impl PcapExporter {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        let header = PcapHeader {
-            version_major: 2,
-            version_minor: 4,
-            ts_correction: 0,
-            ts_accuracy: 0,
-            snaplen: 65535,
-            datalink: DataLink::IPV4,
-            ts_resolution: TsResolution::MicroSecond,
-            endianness: Endianness::Big,
-        };
-        let writer = PcapWriter::with_header(Vec::new(), header).unwrap();
+        let mut writer = PcapNgWriter::with_section_header(
+            Vec::new(),
+            SectionHeaderBlock {
+                endianness: Endianness::Big,
+                major_version: 1,
+                minor_version: 0,
+                section_length: 0,
+                options: vec![],
+            },
+        )
+        .unwrap();
+
+        writer
+            .write_pcapng_block(InterfaceDescriptionBlock {
+                linktype: DataLink::IPV4,
+                snaplen: 65535,
+                options: vec![],
+            })
+            .unwrap();
+
         Self {
             capture_start: Instant::now(),
             writer: Mutex::new(writer),
+            total_tracked_packets: AtomicU64::new(0),
         }
     }
 
     pub fn save(&self, path: &Path) {
-        let dummy_writer = PcapWriter::new(Vec::new()).unwrap();
+        let dummy_writer = PcapNgWriter::new(Vec::new()).unwrap();
         let mut writer = self.writer.lock().unwrap();
         let writer = std::mem::replace(&mut *writer, dummy_writer);
-        let bytes = writer.into_writer();
+        let bytes = writer.into_inner();
         std::fs::write(path, bytes).unwrap();
     }
 
-    fn track_packet(&self, now: Instant, transmit: &OwnedTransmit, source_addr: &SocketAddr) {
+    fn total_tracked_packets(&self) -> u64 {
+        self.total_tracked_packets.load(Ordering::Relaxed)
+    }
+
+    fn track_packet(
+        &self,
+        now: Instant,
+        transmit: &OwnedTransmit,
+        source_addr: &SocketAddr,
+        dropped: bool,
+    ) {
         let IpAddr::V4(source) = source_addr.ip() else {
             unreachable!()
         };
@@ -159,15 +184,36 @@ impl PcapExporter {
 
         let ip_packet = buffer[0..ip_packet_length as usize].to_vec();
 
+        self.total_tracked_packets.fetch_add(1, Ordering::Relaxed);
+
+        let options = if dropped {
+            vec![EnhancedPacketOption::Comment(
+                "This packet was lost in transit!".into(),
+            )]
+        } else {
+            Vec::new()
+        };
+
         let mut writer = self.writer.lock().unwrap();
         writer
-            .write_packet(&PcapPacket {
-                timestamp: now - self.capture_start,
-                orig_len: ip_packet.len() as u32,
+            .write_pcapng_block(EnhancedPacketBlock {
+                interface_id: 0,
+                timestamp: correct_timestamp(now - self.capture_start),
+                original_len: ip_packet.len() as u32,
                 data: ip_packet.into(),
+                options,
             })
             .unwrap();
     }
+}
+
+fn correct_timestamp(d: Duration) -> Duration {
+    // Round to the nearest millisecond
+    let millis = (d.as_secs_f64() * 1000.0).round();
+
+    // Return the time, an order of magnitude smaller (there seems to be a bug in the library we are
+    // using, which multiplies seconds by 1000)
+    Duration::from_secs_f64(millis / 1_000_000.0)
 }
 
 #[derive(Debug)]
@@ -179,7 +225,6 @@ impl UdpPoller for InMemoryUdpPoller {
     }
 }
 
-#[derive(Debug)]
 pub struct InMemorySocketHandle {
     pub network: Arc<InMemoryNetwork>,
     pub addr: SocketAddr,
@@ -190,12 +235,31 @@ pub struct InMemorySocketHandle {
     start: Instant,
 }
 
+impl Debug for InMemorySocketHandle {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "in memory socket ({})", self.addr)
+    }
+}
+
 impl AsyncUdpSocket for InMemorySocketHandle {
     fn create_io_poller(self: Arc<Self>) -> Pin<Box<dyn UdpPoller>> {
         Box::pin(InMemoryUdpPoller)
     }
 
     fn try_send(&self, transmit: &Transmit) -> std::io::Result<()> {
+        let now = Instant::now();
+
+        // We don't have code to handle GSO, so let's ensure transmits are always a single UDP
+        // packet
+        assert!(transmit.segment_size.is_none());
+
+        let transmit = OwnedTransmit {
+            destination: transmit.destination,
+            ecn: transmit.ecn,
+            contents: transmit.contents.to_vec(),
+            segment_size: transmit.segment_size,
+        };
+
         {
             let roll = self.rng.lock().unwrap().f64();
             if roll < self.packet_loss_ratio {
@@ -205,29 +269,23 @@ impl AsyncUdpSocket for InMemorySocketHandle {
                     _ => unreachable!(),
                 };
 
-                println!(
-                    "{:.2}s {source} packet lost!",
-                    self.start.elapsed().as_secs_f64()
-                );
                 self.stats.track_dropped(self.addr, transmit.contents.len());
+                self.pcap_exporter
+                    .track_packet(now, &transmit, &self.addr, true);
+
+                println!(
+                    "{:.2}s {source} packet lost (#{})!",
+                    self.start.elapsed().as_secs_f64(),
+                    self.pcap_exporter.total_tracked_packets(),
+                );
+
                 return Ok(());
             }
         }
 
-        // We don't have code to handle GSO, so let's ensure transmits are always a single UDP
-        // packet
-        assert!(transmit.segment_size.is_none());
-
-        let now = Instant::now();
-        let transmit = OwnedTransmit {
-            destination: transmit.destination,
-            ecn: transmit.ecn,
-            contents: transmit.contents.to_vec(),
-            segment_size: transmit.segment_size,
-        };
-
         // Track in the pcap capture
-        self.pcap_exporter.track_packet(now, &transmit, &self.addr);
+        self.pcap_exporter
+            .track_packet(now, &transmit, &self.addr, false);
         self.stats.track_sent(self.addr, transmit.contents.len());
 
         // Actually send it
@@ -291,7 +349,7 @@ impl AsyncUdpSocket for InMemorySocketHandle {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct InMemorySocket {
     addr: SocketAddr,
     inbound: Arc<Mutex<InboundQueue>>,
@@ -312,7 +370,6 @@ impl InMemorySocket {
 mod queue {
     use super::*;
 
-    #[derive(Debug)]
     pub struct InboundQueue {
         queue: VecDeque<InTransitData>,
         bytes_in_transit: usize,
@@ -369,7 +426,6 @@ mod queue {
     }
 }
 
-#[derive(Debug)]
 pub struct InMemoryNetwork {
     pub sockets: Vec<InMemorySocket>,
     pcap_exporter: Arc<PcapExporter>,
@@ -502,7 +558,6 @@ struct OwnedTransmit {
     pub segment_size: Option<usize>,
 }
 
-#[derive(Debug)]
 struct InTransitData {
     source_addr: SocketAddr,
     transmit: OwnedTransmit,
