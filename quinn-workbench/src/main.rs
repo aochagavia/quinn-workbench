@@ -22,7 +22,7 @@ use tokio::time::Instant;
 
 #[derive(Deserialize)]
 struct JsonConfig {
-    quinn: QuinnJsonConfig,
+    quinn: Option<QuinnJsonConfig>,
     network: NetworkJsonConfig,
 }
 
@@ -72,13 +72,13 @@ struct Opt {
 
     /// Path to the JSON file containing the desired transport config
     #[arg(long)]
-    config: Option<PathBuf>,
+    config: PathBuf,
 }
 
 fn main() -> anyhow::Result<()> {
     std::env::set_var("SSLKEYLOGFILE", "keylog.key");
     let opt = Opt::parse();
-    let json_config = load_json_config(opt.config.as_deref())?;
+    let json_config = load_json_config(&opt.config)?;
 
     if opt.find_hangs {
         find_hangs(opt)
@@ -99,14 +99,10 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-fn load_json_config(path: Option<&Path>) -> anyhow::Result<Option<JsonConfig>> {
-    let Some(path) = path else {
-        return Ok(None);
-    };
-
+fn load_json_config(path: &Path) -> anyhow::Result<JsonConfig> {
     let file = File::open(path).context("unable to open config JSON file for loading")?;
     let parsed = serde_json::from_reader(file).context("error parsing JSON config")?;
-    Ok(Some(parsed))
+    Ok(parsed)
 }
 
 fn find_hangs(opt: Opt) -> anyhow::Result<()> {
@@ -116,7 +112,7 @@ fn find_hangs(opt: Opt) -> anyhow::Result<()> {
         let mut opt = opt.clone();
         opt.quinn_rng_seed = rng.u64(..);
         opt.packet_loss_rng_seed = rng.u64(..);
-        let json_config = load_json_config(opt.config.as_deref())?;
+        let json_config = load_json_config(&opt.config)?;
 
         println!("---\n---New run\n---");
         let pcap_exporter = Arc::new(PcapExporter::new());
@@ -156,19 +152,11 @@ fn find_hangs(opt: Opt) -> anyhow::Result<()> {
 
 async fn run(
     options: &Opt,
-    config: Option<JsonConfig>,
+    config: JsonConfig,
     pcap_exporter: Arc<PcapExporter>,
 ) -> anyhow::Result<()> {
-    let network_config = config
-        .as_ref()
-        .map(|c| c.network.clone())
-        .unwrap_or(NetworkJsonConfig {
-            delay_ms: 5_000,
-            packet_loss_ratio: 0.05,
-            bandwidth: u64::MAX,
-        });
-
-    let quinn_config = config.as_ref().map(|c| &c.quinn);
+    let network_config = config.network;
+    let quinn_config = config.quinn.as_ref();
 
     let simulated_link_delay = Duration::from_millis(network_config.delay_ms);
 
@@ -181,9 +169,7 @@ async fn run(
     };
     println!("* Quinn seed: {}", quinn_rng_seed);
     println!("* Packet loss seed: {}", packet_loss_rng_seed);
-    if let Some(path) = &options.config {
-        println!("* Transport config path: {}", path.display());
-    }
+    println!("* Transport config path: {}", options.config.display());
     println!(
         "* Delay: {:.2}s ({:.2}s RTT)",
         simulated_link_delay.as_secs_f64(),

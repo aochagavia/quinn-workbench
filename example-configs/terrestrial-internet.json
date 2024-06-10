@@ -1,0 +1,7 @@
+{
+  "network": {
+    "delay_ms": 300,
+    "packet_loss_ratio": 0.01,
+    "bandwidth": 104857600
+  }
+}
