@@ -17,5 +17,5 @@ serde_json = "1.0.117"
 tokio = { version = "1.37.0", features = ["test-util"] }
 
 [patch.crates-io]
-quinn = { git = "https://github.com/aochagavia/quinn.git", ref = "03fe410c1e482a488f2ce0f6f0a4a8e5cc7c041b" }
-quinn-proto = { git = "https://github.com/aochagavia/quinn.git", ref = "03fe410c1e482a488f2ce0f6f0a4a8e5cc7c041b" }
+quinn = { git = "https://github.com/aochagavia/quinn.git", ref = "3f9d6dccbb90040f0171deeb43b796e6e0a5ff99" }
+quinn-proto = { git = "https://github.com/aochagavia/quinn.git", ref = "3f9d6dccbb90040f0171deeb43b796e6e0a5ff99" }
