@@ -1,3 +1,4 @@
+mod config;
 mod no_cc;
 mod no_cid;
 
@@ -5,6 +6,7 @@ use crate::no_cc::NoCCConfig;
 use crate::no_cid::NoConnectionIdGenerator;
 use anyhow::{anyhow, Context};
 use clap::Parser;
+use config::{JsonConfig, QuinnJsonConfig};
 use fastrand::Rng;
 use in_memory_network::{InMemoryNetwork, PcapExporter, SERVER_ADDR};
 use quinn::crypto::rustls::QuicClientConfig;
@@ -13,43 +15,21 @@ use quinn::rustls::RootCertStore;
 use quinn::{ClientConfig, Endpoint, EndpointConfig, TransportConfig, VarInt};
 use quinn_proto::AckFrequencyConfig;
 use rustls::pki_types::PrivatePkcs8KeyDer;
-use serde::Deserialize;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
 
-#[derive(Deserialize)]
-struct JsonConfig {
-    quinn: Option<QuinnJsonConfig>,
-    network: NetworkJsonConfig,
-}
-
-#[derive(Deserialize)]
-struct QuinnJsonConfig {
-    initial_rtt_ms: u64,
-    maximum_idle_timeout_ms: u64,
-    packet_threshold: u32,
-    mtu_discovery: bool,
-    disable_congestion_control: bool,
-    maximize_send_and_receive_windows: bool,
-    ack_eliciting_threshold: u32,
-    max_ack_delay_ms: u64,
-}
-
-#[derive(Clone, Deserialize)]
-struct NetworkJsonConfig {
-    delay_ms: u64,
-    packet_loss_ratio: f64,
-    bandwidth: u64,
-}
-
 #[derive(Parser, Debug, Clone)]
 struct Opt {
     /// The amount of times the http request should be repeated
     #[arg(long, default_value_t = 10)]
     repeat: u32,
+
+    /// The size in bytes each response's payload
+    #[arg(long, default_value_t = 1024)]
+    response_payload_size: usize,
 
     /// Whether the run should be non-deterministic, i.e. using a non-constant seed for the random
     /// number generators
@@ -208,7 +188,7 @@ async fn run(
         &mut quinn_rng,
         &mut packet_loss_rng,
     )?;
-    let server_task = tokio::spawn(server_listen(server));
+    let server_task = tokio::spawn(server_listen(server, options.response_payload_size));
 
     // Make repeated requests
     println!("--- Requests ---");
@@ -275,17 +255,18 @@ async fn run(
     Ok(())
 }
 
-async fn server_listen(endpoint: Endpoint) -> anyhow::Result<()> {
+async fn server_listen(endpoint: Endpoint, response_payload_size: usize) -> anyhow::Result<()> {
     let conn = endpoint
         .accept()
         .await
         .ok_or(anyhow!("failed to accept incoming connection"))?
         .await?;
 
-    let response = "<html>
-      <h1>Hello from Internet in Deep Space</h1>
-      <p>This message was sent over HTTP/QUIC/UDP/IP with a long delay</p>
-    </html>";
+    let response: Vec<_> = "Lorem ipsum "
+        .bytes()
+        .cycle()
+        .take(response_payload_size)
+        .collect();
 
     while let Ok((mut tx, mut rx)) = conn.accept_bi().await {
         // Read the request
@@ -293,7 +274,7 @@ async fn server_listen(endpoint: Endpoint) -> anyhow::Result<()> {
         assert_eq!(request, b"GET /index.html");
 
         // Respond
-        tx.write(response.as_bytes()).await?;
+        tx.write_all(&response).await?;
         tx.finish()?;
     }
 
