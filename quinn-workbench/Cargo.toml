@@ -13,5 +13,7 @@ quinn-proto = { workspace = true }
 rcgen = { workspace = true }
 rustls = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace= true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

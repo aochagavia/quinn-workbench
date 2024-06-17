@@ -1,4 +1,4 @@
-mod config;
+mod json_config;
 mod no_cc;
 mod no_cid;
 
@@ -6,9 +6,9 @@ use crate::no_cc::NoCCConfig;
 use crate::no_cid::NoConnectionIdGenerator;
 use anyhow::{anyhow, Context};
 use clap::Parser;
-use config::{JsonConfig, QuinnJsonConfig};
 use fastrand::Rng;
-use in_memory_network::{InMemoryNetwork, PcapExporter, SERVER_ADDR};
+use in_memory_network::{InMemoryNetwork, NetworkConfig, PcapExporter, SERVER_ADDR};
+use json_config::{JsonConfig, QuinnJsonConfig};
 use quinn::crypto::rustls::QuicClientConfig;
 use quinn::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use quinn::rustls::RootCertStore;
@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
+use tracing_subscriber::fmt::Subscriber;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug, Clone)]
 struct Opt {
@@ -27,9 +29,9 @@ struct Opt {
     #[arg(long, default_value_t = 10)]
     repeat: u32,
 
-    /// The size in bytes each response's payload
+    /// The size in bytes each response
     #[arg(long, default_value_t = 1024)]
-    response_payload_size: usize,
+    response_size: usize,
 
     /// Whether the run should be non-deterministic, i.e. using a non-constant seed for the random
     /// number generators
@@ -40,10 +42,10 @@ struct Opt {
     #[arg(long, default_value_t = 0)]
     quinn_rng_seed: u64,
 
-    /// The random seed used for packet loss, which you can control to generate deterministic
-    /// results
+    /// The random seed used for the simulated network (governing packet loss, duplication and
+    /// reordering)
     #[arg(long, default_value_t = 42)]
-    packet_loss_rng_seed: u64,
+    simulated_network_rng_seed: u64,
 
     /// Ignore any provided random seeds and try many of them in succession, attempting to find a
     /// combination that causes the application to hang
@@ -56,6 +58,12 @@ struct Opt {
 }
 
 fn main() -> anyhow::Result<()> {
+    Subscriber::builder()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_ansi(false)
+        .without_time()
+        .init();
+
     std::env::set_var("SSLKEYLOGFILE", "keylog.key");
     let opt = Opt::parse();
     let json_config = load_json_config(&opt.config)?;
@@ -69,11 +77,16 @@ fn main() -> anyhow::Result<()> {
             .build()
             .expect("failed to initialize tokio");
 
+        let start = Instant::now();
         let pcap_exporter = Arc::new(PcapExporter::new());
         let result = rt.block_on(run(&opt, json_config, pcap_exporter.clone()));
 
         // Always save export, regardless of success / failure
         pcap_exporter.save("capture.pcap".as_ref());
+
+        if result.is_err() {
+            eprintln!("Error after {:.2}s", start.elapsed().as_secs_f64());
+        }
 
         result
     }
@@ -91,7 +104,7 @@ fn find_hangs(opt: Opt) -> anyhow::Result<()> {
     loop {
         let mut opt = opt.clone();
         opt.quinn_rng_seed = rng.u64(..);
-        opt.packet_loss_rng_seed = rng.u64(..);
+        opt.simulated_network_rng_seed = rng.u64(..);
         let json_config = load_json_config(&opt.config)?;
 
         println!("---\n---New run\n---");
@@ -139,16 +152,17 @@ async fn run(
     let quinn_config = config.quinn.as_ref();
 
     let simulated_link_delay = Duration::from_millis(network_config.delay_ms);
+    let extra_link_delay = Duration::from_millis(network_config.extra_delay_ms);
 
     println!("--- Params ---");
-    let (quinn_rng_seed, packet_loss_rng_seed) = if options.non_deterministic {
+    let (quinn_rng_seed, simulated_network_rng_seed) = if options.non_deterministic {
         let mut rng = Rng::new();
         (rng.u64(..), rng.u64(..))
     } else {
-        (options.quinn_rng_seed, options.packet_loss_rng_seed)
+        (options.quinn_rng_seed, options.simulated_network_rng_seed)
     };
     println!("* Quinn seed: {}", quinn_rng_seed);
-    println!("* Packet loss seed: {}", packet_loss_rng_seed);
+    println!("* Network seed: {}", simulated_network_rng_seed);
     println!("* Transport config path: {}", options.config.display());
     println!(
         "* Delay: {:.2}s ({:.2}s RTT)",
@@ -156,12 +170,20 @@ async fn run(
         simulated_link_delay.as_secs_f64() * 2.0
     );
     println!(
+        "* Extra delay ({:.2}% chance): {:.2}s",
+        network_config.extra_delay_ratio * 100.0,
+        extra_link_delay.as_secs_f64(),
+    );
+    println!(
         "* Packet loss ratio: {:.2}%",
         network_config.packet_loss_ratio * 100.0
     );
+    println!(
+        "* Packet duplication ratio: {:.2}%",
+        network_config.packet_duplication_ratio * 100.0
+    );
 
     let mut quinn_rng = Rng::with_seed(quinn_rng_seed);
-    let mut packet_loss_rng = Rng::with_seed(packet_loss_rng_seed);
     let start = Instant::now();
 
     // Certificates
@@ -172,10 +194,16 @@ async fn run(
 
     // Network
     let network = Arc::new(InMemoryNetwork::initialize(
-        simulated_link_delay,
-        network_config.bandwidth,
-        network_config.packet_loss_ratio,
+        NetworkConfig {
+            packet_loss_ratio: network_config.packet_loss_ratio,
+            packet_duplication_ratio: network_config.packet_duplication_ratio,
+            link_capacity: network_config.bandwidth,
+            link_delay: simulated_link_delay,
+            link_extra_delay: extra_link_delay,
+            link_extra_delay_ratio: network_config.extra_delay_ratio,
+        },
         pcap_exporter.clone(),
+        Rng::with_seed(simulated_network_rng_seed),
         start,
     ));
 
@@ -186,19 +214,12 @@ async fn run(
         network.clone(),
         quinn_config,
         &mut quinn_rng,
-        &mut packet_loss_rng,
     )?;
-    let server_task = tokio::spawn(server_listen(server, options.response_payload_size));
+    let server_task = tokio::spawn(server_listen(server, options.response_size));
 
     // Make repeated requests
     println!("--- Requests ---");
-    let client = client_endpoint(
-        cert,
-        network.clone(),
-        quinn_config,
-        &mut quinn_rng,
-        &mut packet_loss_rng,
-    )?;
+    let client = client_endpoint(cert, network.clone(), quinn_config, &mut quinn_rng)?;
     println!("0.00s CONNECT");
     let connection = client.connect(SERVER_ADDR, server_name)?.await?;
 
@@ -244,11 +265,19 @@ async fn run(
     for (name, stats) in [("Client", stats.client), ("Server", stats.server)] {
         println!(
             "* {name} packets successfully sent: {} ({} bytes)",
-            stats.sent_packets, stats.sent_bytes,
+            stats.sent.packets, stats.sent.bytes,
+        );
+        println!(
+            "  * From the above packets, {} were duplicates ({} bytes)",
+            stats.duplicates.packets, stats.duplicates.bytes
+        );
+        println!(
+            "  * From the above packets, {} were received out of order by the peer ({} bytes)",
+            stats.out_of_order.packets, stats.out_of_order.bytes
         );
         println!(
             "* {name} packets dropped: {} ({} bytes)",
-            stats.dropped_packets, stats.dropped_bytes
+            stats.dropped.packets, stats.dropped.bytes
         );
     }
 
@@ -287,7 +316,6 @@ fn server_endpoint(
     network: Arc<InMemoryNetwork>,
     quinn_config: Option<&QuinnJsonConfig>,
     quinn_rng: &mut Rng,
-    packet_loss_rng: &mut Rng,
 ) -> anyhow::Result<Endpoint> {
     let mut seed = [0; 32];
     quinn_rng.fill(&mut seed);
@@ -297,7 +325,7 @@ fn server_endpoint(
     Endpoint::new_with_abstract_socket_and_rng_seed(
         endpoint_config(),
         Some(server_config),
-        Arc::new(network.server_socket(packet_loss_rng)),
+        Arc::new(network.server_socket()),
         quinn::default_runtime().unwrap(),
         seed,
     )
@@ -309,7 +337,6 @@ fn client_endpoint(
     network: Arc<InMemoryNetwork>,
     quinn_config: Option<&QuinnJsonConfig>,
     quinn_rng: &mut Rng,
-    packet_loss_rng: &mut Rng,
 ) -> anyhow::Result<Endpoint> {
     let mut seed = [0; 32];
     quinn_rng.fill(&mut seed);
@@ -317,7 +344,7 @@ fn client_endpoint(
     let mut endpoint = Endpoint::new_with_abstract_socket_and_rng_seed(
         endpoint_config(),
         None,
-        Arc::new(network.client_socket(packet_loss_rng)),
+        Arc::new(network.client_socket()),
         quinn::default_runtime().unwrap(),
         seed,
     )
@@ -383,8 +410,10 @@ fn transport_config(quinn_config: Option<&QuinnJsonConfig>) -> TransportConfig {
 
         config.packet_threshold(quinn_config.packet_threshold);
 
-        if quinn_config.disable_congestion_control {
-            config.congestion_controller_factory(Arc::new(NoCCConfig::default()));
+        if let Some(congestion_window) = quinn_config.fixed_congestion_window {
+            config.congestion_controller_factory(Arc::new(NoCCConfig {
+                initial_window: congestion_window,
+            }));
         }
 
         let mut ack_frequency_config = AckFrequencyConfig::default();

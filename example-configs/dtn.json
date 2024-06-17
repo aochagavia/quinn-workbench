@@ -4,15 +4,18 @@
     "maximum_idle_timeout_ms": 100000000000,
     "packet_threshold": 4294967295,
     "mtu_discovery": false,
-    "disable_congestion_control": true,
     "send_window_size": 18446744073709551615,
     "maximize_send_and_receive_windows": true,
     "max_ack_delay_ms": 18446744073709551615,
-    "ack_eliciting_threshold": 10
+    "ack_eliciting_threshold": 10,
+    "fixed_congestion_window": 10240
   },
   "network": {
     "delay_ms": 5000,
+    "extra_delay_ms": 200,
+    "extra_delay_ratio": 0.1,
+    "packet_duplication_ratio": 0.05,
     "packet_loss_ratio": 0.05,
-    "bandwidth": 18446744073709551615
+    "bandwidth": 10240
   }
 }

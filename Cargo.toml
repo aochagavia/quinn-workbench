@@ -15,6 +15,8 @@ rustls = { version = "0.23.8", default-features = false, features = ["ring"] }
 serde = "1.0.203"
 serde_json = "1.0.117"
 tokio = { version = "1.37.0", features = ["test-util"] }
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 
 [patch.crates-io]
 quinn = { git = "https://github.com/aochagavia/quinn.git", ref = "3f9d6dccbb90040f0171deeb43b796e6e0a5ff99" }

@@ -12,7 +12,6 @@ use pnet_packet::{ipv4, PacketSize};
 use queue::InboundQueue;
 use quinn::udp::{EcnCodepoint, RecvMeta, Transmit};
 use quinn::{AsyncUdpSocket, UdpPoller};
-use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
 use std::io::IoSliceMut;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -29,7 +28,7 @@ pub const SERVER_ADDR: SocketAddr =
 pub const CLIENT_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 8080);
 
 #[derive(Clone, Debug)]
-struct NetworkStatsTracker {
+pub struct NetworkStatsTracker {
     inner: Arc<Mutex<NetworkStatsInner>>,
 }
 
@@ -43,6 +42,9 @@ struct TransmitMetadata {
     source: SocketAddr,
     byte_size: usize,
     dropped: bool,
+    out_of_order: bool,
+    duplicate: bool,
+    pcap_number: u64,
 }
 
 impl NetworkStatsTracker {
@@ -52,21 +54,42 @@ impl NetworkStatsTracker {
         }
     }
 
-    fn track_sent(&self, source: SocketAddr, size: usize) {
+    fn track_out_of_order(&self, metadata_index: usize) -> u64 {
         let mut inner = self.inner.lock().unwrap();
+        inner.transmits_metadata[metadata_index].out_of_order = true;
+        inner.transmits_metadata[metadata_index].pcap_number
+    }
+
+    fn track_sent(
+        &self,
+        source: SocketAddr,
+        size: usize,
+        duplicate: bool,
+        pcap_number: u64,
+    ) -> usize {
+        let mut inner = self.inner.lock().unwrap();
+        let metadata_index = inner.transmits_metadata.len();
         inner.transmits_metadata.push(TransmitMetadata {
             source,
             byte_size: size,
             dropped: false,
+            out_of_order: false,
+            duplicate,
+            pcap_number,
         });
+
+        metadata_index
     }
 
-    fn track_dropped(&self, source: SocketAddr, size: usize) {
+    fn track_dropped(&self, source: SocketAddr, size: usize, pcap_number: u64) {
         let mut inner = self.inner.lock().unwrap();
         inner.transmits_metadata.push(TransmitMetadata {
             source,
             byte_size: size,
             dropped: true,
+            out_of_order: false,
+            duplicate: false,
+            pcap_number,
         });
     }
 }
@@ -78,10 +101,16 @@ pub struct NetworkStats {
 
 #[derive(Default)]
 pub struct EndpointStats {
-    pub sent_packets: usize,
-    pub dropped_packets: usize,
-    pub sent_bytes: usize,
-    pub dropped_bytes: usize,
+    pub sent: PacketStats,
+    pub dropped: PacketStats,
+    pub duplicates: PacketStats,
+    pub out_of_order: PacketStats,
+}
+
+#[derive(Default)]
+pub struct PacketStats {
+    pub packets: usize,
+    pub bytes: usize,
 }
 
 pub struct PcapExporter {
@@ -135,10 +164,12 @@ impl PcapExporter {
     fn track_packet(
         &self,
         now: Instant,
-        transmit: &OwnedTransmit,
+        data: &InTransitData,
         source_addr: &SocketAddr,
         dropped: bool,
+        extra_delay: Duration,
     ) {
+        let transmit = &data.transmit;
         let IpAddr::V4(source) = source_addr.ip() else {
             unreachable!()
         };
@@ -186,13 +217,23 @@ impl PcapExporter {
 
         self.total_tracked_packets.fetch_add(1, Ordering::Relaxed);
 
-        let options = if dropped {
-            vec![EnhancedPacketOption::Comment(
+        let mut options = vec![EnhancedPacketOption::Comment(
+            format!("Transmit no. {}", data.number).into(),
+        )];
+
+        if dropped {
+            options.push(EnhancedPacketOption::Comment(
                 "This packet was lost in transit!".into(),
-            )]
-        } else {
-            Vec::new()
-        };
+            ));
+        } else if !extra_delay.is_zero() {
+            options.push(EnhancedPacketOption::Comment(
+                format!(
+                    "This packet had an additional delay of {:.2}s",
+                    extra_delay.as_secs_f64()
+                )
+                .into(),
+            ));
+        }
 
         let mut writer = self.writer.lock().unwrap();
         writer
@@ -228,11 +269,6 @@ impl UdpPoller for InMemoryUdpPoller {
 pub struct InMemorySocketHandle {
     pub network: Arc<InMemoryNetwork>,
     pub addr: SocketAddr,
-    rng: Mutex<Rng>,
-    packet_loss_ratio: f64,
-    pcap_exporter: Arc<PcapExporter>,
-    stats: NetworkStatsTracker,
-    start: Instant,
 }
 
 impl Debug for InMemorySocketHandle {
@@ -247,49 +283,21 @@ impl AsyncUdpSocket for InMemorySocketHandle {
     }
 
     fn try_send(&self, transmit: &Transmit) -> std::io::Result<()> {
-        let now = Instant::now();
-
         // We don't have code to handle GSO, so let's ensure transmits are always a single UDP
         // packet
         assert!(transmit.segment_size.is_none());
 
-        let transmit = OwnedTransmit {
-            destination: transmit.destination,
-            ecn: transmit.ecn,
-            contents: transmit.contents.to_vec(),
-            segment_size: transmit.segment_size,
-        };
+        self.network.send(
+            Instant::now(),
+            self.addr,
+            OwnedTransmit {
+                destination: transmit.destination,
+                ecn: transmit.ecn,
+                contents: transmit.contents.to_vec(),
+                segment_size: transmit.segment_size,
+            },
+        );
 
-        {
-            let roll = self.rng.lock().unwrap().f64();
-            if roll < self.packet_loss_ratio {
-                let source = match self.addr {
-                    CLIENT_ADDR => "Client",
-                    SERVER_ADDR => "Server",
-                    _ => unreachable!(),
-                };
-
-                self.stats.track_dropped(self.addr, transmit.contents.len());
-                self.pcap_exporter
-                    .track_packet(now, &transmit, &self.addr, true);
-
-                println!(
-                    "{:.2}s {source} packet lost (#{})!",
-                    self.start.elapsed().as_secs_f64(),
-                    self.pcap_exporter.total_tracked_packets(),
-                );
-
-                return Ok(());
-            }
-        }
-
-        // Track in the pcap capture
-        self.pcap_exporter
-            .track_packet(now, &transmit, &self.addr, false);
-        self.stats.track_sent(self.addr, transmit.contents.len());
-
-        // Actually send it
-        self.network.send(now, self.addr, transmit);
         Ok(())
     }
 
@@ -357,44 +365,91 @@ pub struct InMemorySocket {
 }
 
 impl InMemorySocket {
-    pub fn new(addr: SocketAddr, link_delay: Duration, link_capacity: u64) -> InMemorySocket {
+    pub fn new(
+        addr: SocketAddr,
+        config: &NetworkConfig,
+        stats_tracker: NetworkStatsTracker,
+        start: Instant,
+    ) -> InMemorySocket {
         InMemorySocket {
             addr,
-            inbound: Arc::new(Mutex::new(InboundQueue::new(link_delay, link_capacity))),
+            inbound: Arc::new(Mutex::new(InboundQueue::new(
+                config.link_delay,
+                config.link_capacity,
+                stats_tracker,
+                start,
+            ))),
             waker: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub fn has_enough_capacity(&self, data: &InTransitData, duplicate: bool) -> bool {
+        self.inbound
+            .lock()
+            .unwrap()
+            .has_enough_capacity(data, duplicate)
+    }
+
+    pub fn enqueue_send(&self, data: InTransitData, metadata_index: usize, extra_delay: Duration) {
+        self.inbound
+            .lock()
+            .unwrap()
+            .send(data, metadata_index, extra_delay);
     }
 }
 
 // This mod is meant to enforce encapsulation of InboundQueue's private fields
 mod queue {
     use super::*;
+    use std::collections::BinaryHeap;
 
     pub struct InboundQueue {
-        queue: VecDeque<InTransitData>,
+        queue: BinaryHeap<PrioritizedInTransitData>,
         bytes_in_transit: usize,
         link_delay: Duration,
         link_capacity: usize,
+        highest_received_transmit_number: AtomicU64,
+        stats_tracker: NetworkStatsTracker,
+        start: Instant,
     }
 
     impl InboundQueue {
-        pub(super) fn new(link_delay: Duration, link_capacity: u64) -> Self {
+        pub(super) fn new(
+            link_delay: Duration,
+            link_capacity: u64,
+            stats_tracker: NetworkStatsTracker,
+            start: Instant,
+        ) -> Self {
             Self {
-                queue: VecDeque::new(),
+                queue: BinaryHeap::new(),
                 bytes_in_transit: 0,
                 link_delay,
                 link_capacity: link_capacity as usize,
+                highest_received_transmit_number: Default::default(),
+                stats_tracker,
+                start,
             }
         }
 
-        pub(super) fn send(&mut self, data: InTransitData) -> bool {
-            if self.bytes_in_transit + data.transmit.contents.len() <= self.link_capacity {
-                self.bytes_in_transit += data.transmit.contents.len();
-                self.queue.push_back(data);
-                true
-            } else {
-                false
-            }
+        pub(super) fn has_enough_capacity(&self, data: &InTransitData, duplicate: bool) -> bool {
+            let duplicate_multiplier = if duplicate { 2 } else { 1 };
+            self.bytes_in_transit + data.transmit.contents.len() * duplicate_multiplier
+                <= self.link_capacity
+        }
+
+        pub(super) fn send(
+            &mut self,
+            data: InTransitData,
+            metadata_index: usize,
+            extra_delay: Duration,
+        ) {
+            assert!(self.has_enough_capacity(&data, false));
+            self.bytes_in_transit += data.transmit.contents.len();
+            self.queue.push(PrioritizedInTransitData {
+                data,
+                metadata_index,
+                delay: self.link_delay + extra_delay,
+            });
         }
 
         pub(super) fn is_empty(&self) -> bool {
@@ -404,24 +459,50 @@ mod queue {
         pub(super) fn receive(
             &mut self,
             max_transmits: usize,
-        ) -> impl Iterator<Item = InTransitData> + '_ {
+        ) -> impl Iterator<Item = InTransitData> {
             let now = Instant::now();
-            let transmits_to_read = self
-                .queue
-                .iter()
-                .take(max_transmits)
-                .take_while(|t| t.sent + self.link_delay <= now)
-                .count();
+            let mut highest_received = self
+                .highest_received_transmit_number
+                .load(Ordering::Relaxed);
+            let mut received = Vec::new();
 
-            for data in self.queue.iter().take(transmits_to_read) {
-                self.bytes_in_transit -= data.transmit.contents.len();
+            for _ in 0..max_transmits {
+                if self
+                    .queue
+                    .peek()
+                    .is_some_and(|next| next.arrival_time() <= now)
+                {
+                    let data = self.queue.pop().unwrap();
+
+                    // Keep track of out-of-order packets
+                    if data.data.number < highest_received {
+                        let pcap_number =
+                            self.stats_tracker.track_out_of_order(data.metadata_index);
+                        println!(
+                            "{:.2}s WARN Received reordered packet (#{pcap_number}) after it was delayed for extra {:.2}s",
+                            self.start.elapsed().as_secs_f64(),
+                            (data.delay - self.link_delay).as_secs_f64(),
+                        );
+                    }
+                    highest_received = highest_received.max(data.data.number);
+
+                    // Keep track of bytes in transit
+                    self.bytes_in_transit -= data.data.transmit.contents.len();
+
+                    received.push(data.data);
+                } else {
+                    break;
+                }
             }
 
-            self.queue.drain(..transmits_to_read)
+            self.highest_received_transmit_number
+                .store(highest_received, Ordering::Relaxed);
+
+            received.into_iter()
         }
 
         pub(super) fn time_of_next_receive(&self) -> Instant {
-            self.queue[0].sent + self.link_delay
+            self.queue.peek().unwrap().arrival_time()
         }
     }
 }
@@ -430,8 +511,10 @@ pub struct InMemoryNetwork {
     pub sockets: Vec<InMemorySocket>,
     pcap_exporter: Arc<PcapExporter>,
     stats_tracker: NetworkStatsTracker,
-    packet_loss_ratio: f64,
+    rng: Mutex<Rng>,
+    config: NetworkConfig,
     start: Instant,
+    next_transmit_number: AtomicU64,
 }
 
 impl InMemoryNetwork {
@@ -439,50 +522,42 @@ impl InMemoryNetwork {
     ///
     /// The link capacity is measured in bytes per `link_delay`
     pub fn initialize(
-        link_delay: Duration,
-        link_capacity: u64,
-        packet_loss_ratio: f64,
+        config: NetworkConfig,
         pcap_exporter: Arc<PcapExporter>,
+        rng: Rng,
         start: Instant,
     ) -> Self {
         let server_addr = SERVER_ADDR;
         let client_addr = CLIENT_ADDR;
 
+        let stats_tracker = NetworkStatsTracker::new();
         Self {
             sockets: vec![
-                InMemorySocket::new(server_addr, link_delay, link_capacity),
-                InMemorySocket::new(client_addr, link_delay, link_capacity),
+                InMemorySocket::new(server_addr, &config, stats_tracker.clone(), start),
+                InMemorySocket::new(client_addr, &config, stats_tracker.clone(), start),
             ],
             pcap_exporter,
-            stats_tracker: NetworkStatsTracker::new(),
-            packet_loss_ratio,
+            stats_tracker,
+            config,
+            rng: Mutex::new(rng),
             start,
+            next_transmit_number: Default::default(),
         }
     }
 
     /// Returns a handle to the server's socket
-    pub fn server_socket(self: Arc<InMemoryNetwork>, rng: &mut Rng) -> InMemorySocketHandle {
+    pub fn server_socket(self: Arc<InMemoryNetwork>) -> InMemorySocketHandle {
         InMemorySocketHandle {
             addr: self.sockets[0].addr,
-            packet_loss_ratio: self.packet_loss_ratio,
-            rng: Mutex::new(Rng::with_seed(rng.u64(..))),
             network: self.clone(),
-            stats: self.stats_tracker.clone(),
-            pcap_exporter: self.pcap_exporter.clone(),
-            start: self.start,
         }
     }
 
     /// Returns a handle to the client's socket
-    pub fn client_socket(self: Arc<InMemoryNetwork>, rng: &mut Rng) -> InMemorySocketHandle {
+    pub fn client_socket(self: Arc<InMemoryNetwork>) -> InMemorySocketHandle {
         InMemorySocketHandle {
             addr: self.sockets[1].addr,
-            packet_loss_ratio: self.packet_loss_ratio,
-            rng: Mutex::new(Rng::with_seed(rng.u64(..))),
             network: self.clone(),
-            stats: self.stats_tracker.clone(),
-            pcap_exporter: self.pcap_exporter.clone(),
-            start: self.start,
         }
     }
 
@@ -498,13 +573,78 @@ impl InMemoryNetwork {
     /// Sends an [`OwnedTransmit`] to its destination
     fn send(&self, now: Instant, source_addr: SocketAddr, transmit: OwnedTransmit) {
         let socket = self.socket(transmit.destination);
-        let sent = socket.inbound.lock().unwrap().send(InTransitData {
+
+        let source = match source_addr {
+            CLIENT_ADDR => "Client",
+            SERVER_ADDR => "Server",
+            _ => unreachable!(),
+        };
+
+        let mut dropped = false;
+        let mut duplicate = false;
+        let mut extra_delay = Duration::from_secs(0);
+
+        let roll1 = self.rng.lock().unwrap().f64();
+        if roll1 < self.config.packet_loss_ratio {
+            dropped = true;
+        } else if roll1 < self.config.packet_loss_ratio + self.config.packet_duplication_ratio {
+            duplicate = true;
+        }
+
+        let roll2 = self.rng.lock().unwrap().f64();
+        if roll2 < self.config.link_extra_delay_ratio {
+            extra_delay = self.config.link_extra_delay;
+        }
+
+        let data = InTransitData {
             source_addr,
             transmit,
             sent: now,
-        });
+            number: self.next_transmit_number.fetch_add(1, Ordering::Relaxed),
+        };
 
-        if sent {
+        // A packet could also be dropped if the socket doesn't have enough capacity
+        if dropped || !socket.has_enough_capacity(&data, duplicate) {
+            self.pcap_exporter
+                .track_packet(now, &data, &source_addr, true, Duration::from_secs(0));
+            self.stats_tracker.track_dropped(
+                source_addr,
+                data.transmit.contents.len(),
+                self.pcap_exporter.total_tracked_packets(),
+            );
+
+            println!(
+                "{:.2}s WARN {source} packet lost (#{})!",
+                self.start.elapsed().as_secs_f64(),
+                self.pcap_exporter.total_tracked_packets(),
+            );
+        } else {
+            let total = if duplicate { 2 } else { 1 };
+            let packets = vec![data; total];
+
+            for (i, packet) in packets.into_iter().enumerate() {
+                let duplicate = i == 1;
+
+                self.pcap_exporter
+                    .track_packet(now, &packet, &source_addr, false, extra_delay);
+                let metadata_index = self.stats_tracker.track_sent(
+                    source_addr,
+                    packet.transmit.contents.len(),
+                    duplicate,
+                    self.pcap_exporter.total_tracked_packets(),
+                );
+
+                if duplicate {
+                    println!(
+                        "{:.2}s WARN {source} sent duplicate packet (#{})!",
+                        self.start.elapsed().as_secs_f64(),
+                        self.pcap_exporter.total_tracked_packets(),
+                    );
+                }
+
+                socket.enqueue_send(packet, metadata_index, extra_delay);
+            }
+
             // Wake the receiver if it is waiting for incoming transmits
             let mut opt_waker = socket.waker.lock().unwrap();
             if let Some(waker) = opt_waker.take() {
@@ -520,24 +660,40 @@ impl InMemoryNetwork {
         let mut server = EndpointStats::default();
 
         for metadata in &stats_tracker.transmits_metadata {
-            match (metadata.source, metadata.dropped) {
-                (CLIENT_ADDR, true) => {
-                    client.dropped_packets += 1;
-                    client.dropped_bytes += metadata.byte_size;
-                }
-                (CLIENT_ADDR, false) => {
-                    client.sent_packets += 1;
-                    client.sent_bytes += metadata.byte_size;
-                }
-                (SERVER_ADDR, false) => {
-                    server.sent_packets += 1;
-                    server.sent_bytes += metadata.byte_size;
-                }
-                (SERVER_ADDR, true) => {
-                    server.dropped_packets += 1;
-                    server.dropped_bytes += metadata.byte_size;
-                }
+            let endpoint_stats = match metadata.source {
+                CLIENT_ADDR => &mut client,
+                SERVER_ADDR => &mut server,
                 _ => unreachable!(),
+            };
+
+            if metadata.dropped {
+                endpoint_stats.dropped.packets += 1;
+                endpoint_stats.dropped.bytes += metadata.byte_size;
+            } else {
+                endpoint_stats.sent.packets += 1;
+                endpoint_stats.sent.bytes += metadata.byte_size;
+            }
+        }
+
+        for metadata in &stats_tracker.transmits_metadata {
+            if metadata.dropped {
+                continue;
+            }
+
+            let endpoint_stats = match metadata.source {
+                CLIENT_ADDR => &mut client,
+                SERVER_ADDR => &mut server,
+                _ => unreachable!(),
+            };
+
+            if metadata.out_of_order {
+                endpoint_stats.out_of_order.packets += 1;
+                endpoint_stats.out_of_order.bytes += metadata.byte_size;
+            }
+
+            if metadata.duplicate {
+                endpoint_stats.duplicates.packets += 1;
+                endpoint_stats.duplicates.bytes += metadata.byte_size;
             }
         }
 
@@ -545,7 +701,16 @@ impl InMemoryNetwork {
     }
 }
 
-#[derive(Debug)]
+pub struct NetworkConfig {
+    pub packet_loss_ratio: f64,
+    pub packet_duplication_ratio: f64,
+    pub link_capacity: u64,
+    pub link_delay: Duration,
+    pub link_extra_delay: Duration,
+    pub link_extra_delay_ratio: f64,
+}
+
+#[derive(Clone, Debug)]
 struct OwnedTransmit {
     /// The socket this datagram should be sent to
     pub destination: SocketAddr,
@@ -558,8 +723,47 @@ struct OwnedTransmit {
     pub segment_size: Option<usize>,
 }
 
-struct InTransitData {
+#[derive(Clone)]
+pub struct InTransitData {
     source_addr: SocketAddr,
     transmit: OwnedTransmit,
     sent: Instant,
+    number: u64,
+}
+
+// In transit data, sorted by arrival time
+struct PrioritizedInTransitData {
+    data: InTransitData,
+    metadata_index: usize,
+    delay: Duration,
+}
+
+impl PrioritizedInTransitData {
+    fn arrival_time(&self) -> Instant {
+        self.data.sent + self.delay
+    }
+}
+
+impl Eq for PrioritizedInTransitData {}
+
+impl PartialEq<Self> for PrioritizedInTransitData {
+    fn eq(&self, other: &Self) -> bool {
+        self.arrival_time() == other.arrival_time() && self.data.number == other.data.number
+    }
+}
+
+impl PartialOrd<Self> for PrioritizedInTransitData {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PrioritizedInTransitData {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Note: the order is reversed, so the "max" in transit data will be the next one to be sent
+        other
+            .arrival_time()
+            .cmp(&self.arrival_time())
+            .then(other.data.number.cmp(&self.data.number))
+    }
 }

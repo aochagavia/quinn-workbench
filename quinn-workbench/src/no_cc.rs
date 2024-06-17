@@ -4,9 +4,8 @@ use std::any::Any;
 use std::sync::Arc;
 use std::time::Instant;
 
-#[derive(Debug, Default, Clone)]
-
 /// No congestion control
+#[derive(Clone)]
 pub struct NoCC {
     config: Arc<NoCCConfig>,
     /// Maximum number of bytes in flight that may be sent.
@@ -64,7 +63,7 @@ impl Controller for NoCC {
 /// Configuration for the `NoCC` congestion controller
 #[derive(Debug, Clone)]
 pub struct NoCCConfig {
-    initial_window: u64,
+    pub initial_window: u64,
 }
 
 impl Default for NoCCConfig {

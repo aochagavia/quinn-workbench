@@ -1,6 +1,9 @@
 {
   "network": {
     "delay_ms": 300,
+    "extra_delay_ms": 10,
+    "extra_delay_ratio": 0.05,
+    "packet_duplication_ratio": 0.01,
     "packet_loss_ratio": 0.01,
     "bandwidth": 104857600
   }
