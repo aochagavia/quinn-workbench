@@ -4,7 +4,6 @@
     "maximum_idle_timeout_ms": 100000000000,
     "packet_threshold": 4294967295,
     "mtu_discovery": false,
-    "send_window_size": 18446744073709551615,
     "maximize_send_and_receive_windows": true,
     "max_ack_delay_ms": 18446744073709551615,
     "ack_eliciting_threshold": 10,
