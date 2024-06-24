@@ -1,61 +1,27 @@
-mod json_config;
-mod no_cc;
-mod no_cid;
+mod config;
+mod quinn_extensions;
 
-use crate::no_cc::NoCCConfig;
-use crate::no_cid::NoConnectionIdGenerator;
 use anyhow::{anyhow, Context};
 use clap::Parser;
+use config::cli::CliOpt;
+use config::json::{JsonConfig, QuinnJsonConfig};
 use fastrand::Rng;
 use in_memory_network::{InMemoryNetwork, NetworkConfig, PcapExporter, SERVER_ADDR};
-use json_config::{JsonConfig, QuinnJsonConfig};
 use quinn::crypto::rustls::QuicClientConfig;
 use quinn::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use quinn::rustls::RootCertStore;
 use quinn::{ClientConfig, Endpoint, EndpointConfig, TransportConfig, VarInt};
+use quinn_extensions::no_cc::NoCCConfig;
+use quinn_extensions::no_cid::NoConnectionIdGenerator;
 use quinn_proto::AckFrequencyConfig;
 use rustls::pki_types::PrivatePkcs8KeyDer;
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
 use tracing_subscriber::fmt::Subscriber;
 use tracing_subscriber::EnvFilter;
-
-#[derive(Parser, Debug, Clone)]
-struct Opt {
-    /// The amount of times the http request should be repeated
-    #[arg(long, default_value_t = 10)]
-    repeat: u32,
-
-    /// The size in bytes each response
-    #[arg(long, default_value_t = 1024)]
-    response_size: usize,
-
-    /// Whether the run should be non-deterministic, i.e. using a non-constant seed for the random
-    /// number generators
-    #[arg(long)]
-    non_deterministic: bool,
-
-    /// Quinn's random seed, which you can control to generate deterministic results
-    #[arg(long, default_value_t = 0)]
-    quinn_rng_seed: u64,
-
-    /// The random seed used for the simulated network (governing packet loss, duplication and
-    /// reordering)
-    #[arg(long, default_value_t = 42)]
-    simulated_network_rng_seed: u64,
-
-    /// Ignore any provided random seeds and try many of them in succession, attempting to find a
-    /// combination that causes the application to hang
-    #[arg(long)]
-    find_hangs: bool,
-
-    /// Path to the JSON file containing the desired transport config
-    #[arg(long)]
-    config: PathBuf,
-}
 
 fn main() -> anyhow::Result<()> {
     Subscriber::builder()
@@ -65,7 +31,7 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     std::env::set_var("SSLKEYLOGFILE", "keylog.key");
-    let opt = Opt::parse();
+    let opt = CliOpt::parse();
     let json_config = load_json_config(&opt.config)?;
 
     if opt.find_hangs {
@@ -98,7 +64,7 @@ fn load_json_config(path: &Path) -> anyhow::Result<JsonConfig> {
     Ok(parsed)
 }
 
-fn find_hangs(opt: Opt) -> anyhow::Result<()> {
+fn find_hangs(opt: CliOpt) -> anyhow::Result<()> {
     let start = Instant::now();
     let mut rng = Rng::new();
     loop {
@@ -126,8 +92,6 @@ fn find_hangs(opt: Opt) -> anyhow::Result<()> {
             std::thread::sleep(Duration::from_millis(1500));
             if !thread.is_finished() {
                 panic!("Got stuck");
-                // break Ok(());
-                // continue;
             }
         }
 
@@ -144,7 +108,7 @@ fn find_hangs(opt: Opt) -> anyhow::Result<()> {
 }
 
 async fn run(
-    options: &Opt,
+    options: &CliOpt,
     config: JsonConfig,
     pcap_exporter: Arc<PcapExporter>,
 ) -> anyhow::Result<()> {

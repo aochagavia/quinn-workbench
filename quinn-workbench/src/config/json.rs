@@ -20,10 +20,19 @@ pub struct QuinnJsonConfig {
 
 #[derive(Clone, Deserialize)]
 pub struct NetworkJsonConfig {
+    /// The one-way delay of the network, in milliseconds
     pub delay_ms: u64,
+    /// The one-way extra delay of the network, which will be applied at random according to
+    /// `extra_delay_ratio`
     pub extra_delay_ms: u64,
+    /// The ratio of packets that will have an extra delay applied, to simulate packet reordering
+    /// (the value must be between 0 and 1)
     pub extra_delay_ratio: f64,
+    /// The ratio of packets that will be duplicated upon being sent (the value must be between 0
+    /// and 1)
     pub packet_duplication_ratio: f64,
+    /// The ratio of packets that will be lost (the value must be between 0 and 1)
     pub packet_loss_ratio: f64,
+    /// The one-way bandwidth of the network, in bytes
     pub bandwidth: u64,
 }
