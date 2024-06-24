@@ -322,12 +322,11 @@ fn server_endpoint(
 
     let mut server_config = quinn::ServerConfig::with_single_cert(vec![cert], key).unwrap();
     server_config.transport = Arc::new(transport_config(quinn_config));
-    Endpoint::new_with_abstract_socket_and_rng_seed(
-        endpoint_config(),
+    Endpoint::new_with_abstract_socket(
+        endpoint_config(seed),
         Some(server_config),
         Arc::new(network.server_socket()),
         quinn::default_runtime().unwrap(),
-        seed,
     )
     .context("failed to create server endpoint")
 }
@@ -341,12 +340,11 @@ fn client_endpoint(
     let mut seed = [0; 32];
     quinn_rng.fill(&mut seed);
 
-    let mut endpoint = Endpoint::new_with_abstract_socket_and_rng_seed(
-        endpoint_config(),
+    let mut endpoint = Endpoint::new_with_abstract_socket(
+        endpoint_config(seed),
         None,
         Arc::new(network.client_socket()),
         quinn::default_runtime().unwrap(),
-        seed,
     )
     .context("failed to create client endpoint")?;
 
@@ -355,8 +353,9 @@ fn client_endpoint(
     Ok(endpoint)
 }
 
-fn endpoint_config() -> EndpointConfig {
+fn endpoint_config(rng_seed: [u8; 32]) -> EndpointConfig {
     let mut config = EndpointConfig::default();
+    config.rng_seed(Some(rng_seed));
     config.cid_generator(|| Box::new(NoConnectionIdGenerator));
     config
 }
