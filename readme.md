@@ -21,7 +21,7 @@ client.
 
 ### Getting started
 
-Assuming you have a [working Rust toolchain](https://rustup.rs/), you can get started with:
+After [installing Rust](https://rustup.rs/), you can get started with:
 
 ```bash
 cargo run --release -- --config example-configs/dtn.json
@@ -104,6 +104,37 @@ Here's the meaning of the different parameters:
 - `network.packet_loss_ratio`: The ratio of packets that will be lost during transmission (the value
   must be between 0 and 1).
 - `network.bandwidth`: The one-way bandwidth of the network in bytes.
+
+### Command line arguments
+
+While the JSON configuration controls the QUIC and network parameters, the following command line
+flags control other aspects of the simulation:
+
+```
+--repeat <REPEAT>
+    The amount of times the request should be repeated
+    
+    [default: 10]
+
+--response-size <RESPONSE_SIZE>
+    The size of each response, in bytes
+    
+    [default: 1024]
+
+--non-deterministic
+    Whether the run should be non-deterministic, i.e. using a non-constant seed for the random number generators
+
+--quinn-rng-seed <QUINN_RNG_SEED>
+    Quinn's random seed, which you can control to generate deterministic results (Quinn uses randomness internally)
+    
+    [default: 0]
+
+--simulated-network-rng-seed <SIMULATED_NETWORK_RNG_SEED>
+    The random seed used for the simulated network (governing packet loss, duplication and reordering)
+    
+    [default: 42]
+
+```
 
 ### Acknowledgements
 

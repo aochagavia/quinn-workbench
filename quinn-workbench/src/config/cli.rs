@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 #[derive(Parser, Debug, Clone)]
 pub struct CliOpt {
-    /// The amount of times the http request should be repeated
+    /// The amount of times the request should be repeated
     #[arg(long, default_value_t = 10)]
     pub repeat: u32,
 
@@ -16,7 +16,8 @@ pub struct CliOpt {
     #[arg(long)]
     pub non_deterministic: bool,
 
-    /// Quinn's random seed, which you can control to generate deterministic results
+    /// Quinn's random seed, which you can control to generate deterministic results (Quinn uses
+    /// randomness internally)
     #[arg(long, default_value_t = 0)]
     pub quinn_rng_seed: u64,
 
