@@ -546,7 +546,7 @@ dependencies = [
 [[package]]
 name = "quinn"
 version = "0.11.2"
-source = "git+https://github.com/quinn-rs/quinn.git#bc150927d81fd46fd637848da24ed178ff2f735b"
+source = "git+https://github.com/quinn-rs/quinn.git?rev=bc150927d81fd46fd637848da24ed178ff2f735b#bc150927d81fd46fd637848da24ed178ff2f735b"
 dependencies = [
  "bytes",
  "pin-project-lite",
@@ -562,7 +562,7 @@ dependencies = [
 [[package]]
 name = "quinn-proto"
 version = "0.11.3"
-source = "git+https://github.com/quinn-rs/quinn.git#bc150927d81fd46fd637848da24ed178ff2f735b"
+source = "git+https://github.com/quinn-rs/quinn.git?rev=bc150927d81fd46fd637848da24ed178ff2f735b#bc150927d81fd46fd637848da24ed178ff2f735b"
 dependencies = [
  "bytes",
  "rand",
@@ -579,7 +579,7 @@ dependencies = [
 [[package]]
 name = "quinn-udp"
 version = "0.5.2"
-source = "git+https://github.com/quinn-rs/quinn.git#bc150927d81fd46fd637848da24ed178ff2f735b"
+source = "git+https://github.com/quinn-rs/quinn.git?rev=bc150927d81fd46fd637848da24ed178ff2f735b#bc150927d81fd46fd637848da24ed178ff2f735b"
 dependencies = [
  "libc",
  "once_cell",

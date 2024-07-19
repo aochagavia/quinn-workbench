@@ -19,5 +19,5 @@ tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 
 [patch.crates-io]
-quinn = { git = "https://github.com/quinn-rs/quinn.git", ref = "bc150927d81fd46fd637848da24ed178ff2f735b" }
-quinn-proto = { git = "https://github.com/quinn-rs/quinn.git", ref = "bc150927d81fd46fd637848da24ed178ff2f735b" }
+quinn = { git = "https://github.com/quinn-rs/quinn.git", rev = "bc150927d81fd46fd637848da24ed178ff2f735b" }
+quinn-proto = { git = "https://github.com/quinn-rs/quinn.git", rev = "bc150927d81fd46fd637848da24ed178ff2f735b" }
