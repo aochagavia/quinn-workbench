@@ -226,6 +226,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06ea2b9bc92be3c2baa9334a323ebca2d6f074ff852cd1d7b11064035cd3868f"
 
 [[package]]
+name = "counting-allocator"
+version = "0.1.0"
+
+[[package]]
 name = "deranged"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -594,6 +598,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "counting-allocator",
  "fastrand",
  "in-memory-network",
  "quinn",

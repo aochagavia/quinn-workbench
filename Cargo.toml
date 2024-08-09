@@ -1,5 +1,5 @@
 [workspace]
-members = ["in-memory-network", "quinn-workbench"]
+members = ["counting-allocator", "in-memory-network", "quinn-workbench"]
 resolver = "2"
 
 [workspace.dependencies]

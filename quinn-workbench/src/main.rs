@@ -5,6 +5,7 @@ use anyhow::{anyhow, Context};
 use clap::Parser;
 use config::cli::CliOpt;
 use config::json::{JsonConfig, QuinnJsonConfig};
+use counting_allocator::CountingAlloc;
 use fastrand::Rng;
 use in_memory_network::{InMemoryNetwork, NetworkConfig, PcapExporter, SERVER_ADDR};
 use quinn::crypto::rustls::QuicClientConfig;
@@ -22,6 +23,9 @@ use std::time::Duration;
 use tokio::time::Instant;
 use tracing_subscriber::fmt::Subscriber;
 use tracing_subscriber::EnvFilter;
+
+#[global_allocator]
+static GLOBAL: CountingAlloc = CountingAlloc;
 
 fn main() -> anyhow::Result<()> {
     Subscriber::builder()
@@ -244,6 +248,10 @@ async fn run(
             stats.dropped.packets, stats.dropped.bytes
         );
     }
+    println!(
+        "* Peak memory usage (whole process): {} bytes",
+        counting_allocator::get_peak_allocated()
+    );
 
     Ok(())
 }
