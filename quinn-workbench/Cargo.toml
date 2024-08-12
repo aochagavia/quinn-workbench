@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
-counting-allocator = { path = "../counting-allocator" }
 fastrand = { workspace = true }
 in-memory-network = { path = "../in-memory-network" }
 quinn = { workspace = true }
