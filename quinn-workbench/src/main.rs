@@ -159,6 +159,7 @@ async fn run(
     // Network
     let network = Arc::new(InMemoryNetwork::initialize(
         NetworkConfig {
+            congestion_event_ratio: network_config.congestion_event_ratio,
             packet_loss_ratio: network_config.packet_loss_ratio,
             packet_duplication_ratio: network_config.packet_duplication_ratio,
             link_capacity: network_config.bandwidth,

@@ -63,6 +63,8 @@ pub struct NetworkJsonConfig {
     pub packet_duplication_ratio: f64,
     /// The ratio of packets that will be lost (the value must be between 0 and 1)
     pub packet_loss_ratio: f64,
+    /// The ratio of packets that will be marked with a CE ECN codepoint (the value must be between 0 and 1)
+    pub congestion_event_ratio: f64,
     /// The one-way bandwidth of the network, in bytes
     pub bandwidth: u64,
 }

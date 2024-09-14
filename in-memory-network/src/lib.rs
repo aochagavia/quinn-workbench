@@ -166,6 +166,7 @@ impl PcapExporter {
         now: Instant,
         data: &InTransitData,
         source_addr: &SocketAddr,
+        ecn: Option<EcnCodepoint>,
         dropped: bool,
         extra_delay: Duration,
     ) {
@@ -198,7 +199,6 @@ impl PcapExporter {
         ip_writer.set_version(4);
         ip_writer.set_header_length(5); // We don't use options
         ip_writer.set_dscp(0); // Copied from a Wireshark dump
-        ip_writer.set_ecn(0b10); // Copied from a Wireshark dump
         ip_writer.set_identification(0); // We never fragment
         ip_writer.set_flags(0b010); // We never fragment
         ip_writer.set_fragment_offset(0); // We never fragment
@@ -208,6 +208,7 @@ impl PcapExporter {
         ip_writer.set_destination(destination);
         ip_writer.set_payload(&udp_packet);
         ip_writer.set_total_length(ip_packet_length);
+        ip_writer.set_ecn(ecn.map(|codepoint| codepoint as u8).unwrap_or(0));
         let checksum = ipv4::checksum(&ip_writer.to_immutable());
         ip_writer.set_checksum(checksum);
         let ip_packet_length = ip_writer.packet_size();
@@ -571,7 +572,7 @@ impl InMemoryNetwork {
     }
 
     /// Sends an [`OwnedTransmit`] to its destination
-    fn send(&self, now: Instant, source_addr: SocketAddr, transmit: OwnedTransmit) {
+    fn send(&self, now: Instant, source_addr: SocketAddr, mut transmit: OwnedTransmit) {
         let socket = self.socket(transmit.destination);
 
         let source = match source_addr {
@@ -596,6 +597,17 @@ impl InMemoryNetwork {
             extra_delay = self.config.link_extra_delay;
         }
 
+        let roll3 = self.rng.lock().unwrap().f64();
+        if roll3 < self.config.congestion_event_ratio {
+            // The Quinn-provided transmit must indicate support for ECN
+            assert!(transmit
+                .ecn
+                .is_some_and(|codepoint| codepoint as u8 == 0b10 || codepoint as u8 == 0b01));
+
+            // Set explicit congestion event codepoint
+            transmit.ecn = Some(EcnCodepoint::from_bits(0b11).unwrap())
+        }
+
         let data = InTransitData {
             source_addr,
             transmit,
@@ -605,8 +617,14 @@ impl InMemoryNetwork {
 
         // A packet could also be dropped if the socket doesn't have enough capacity
         if dropped || !socket.has_enough_capacity(&data, duplicate) {
-            self.pcap_exporter
-                .track_packet(now, &data, &source_addr, true, Duration::from_secs(0));
+            self.pcap_exporter.track_packet(
+                now,
+                &data,
+                &source_addr,
+                data.transmit.ecn,
+                true,
+                Duration::from_secs(0),
+            );
             self.stats_tracker.track_dropped(
                 source_addr,
                 data.transmit.contents.len(),
@@ -625,8 +643,14 @@ impl InMemoryNetwork {
             for (i, packet) in packets.into_iter().enumerate() {
                 let duplicate = i == 1;
 
-                self.pcap_exporter
-                    .track_packet(now, &packet, &source_addr, false, extra_delay);
+                self.pcap_exporter.track_packet(
+                    now,
+                    &packet,
+                    &source_addr,
+                    packet.transmit.ecn,
+                    false,
+                    extra_delay,
+                );
                 let metadata_index = self.stats_tracker.track_sent(
                     source_addr,
                     packet.transmit.contents.len(),
@@ -702,6 +726,7 @@ impl InMemoryNetwork {
 }
 
 pub struct NetworkConfig {
+    pub congestion_event_ratio: f64,
     pub packet_loss_ratio: f64,
     pub packet_duplication_ratio: f64,
     pub link_capacity: u64,

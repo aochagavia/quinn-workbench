@@ -5,6 +5,7 @@
     "extra_delay_ratio": 0.05,
     "packet_duplication_ratio": 0.01,
     "packet_loss_ratio": 0.01,
+    "congestion_event_ratio":  0.00,
     "bandwidth": 104857600
   }
 }

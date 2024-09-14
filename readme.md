@@ -67,6 +67,7 @@ Consider the following config:
     "extra_delay_ratio": 0.1,
     "packet_duplication_ratio": 0.05,
     "packet_loss_ratio": 0.05,
+    "congestion_event_ratio":  0.00,
     "bandwidth": 10240
   }
 }
@@ -103,6 +104,8 @@ Here's the meaning of the different parameters:
   (the value must be between 0 and 1).
 - `network.packet_loss_ratio`: The ratio of packets that will be lost during transmission (the value
   must be between 0 and 1).
+- `network.congestion_event_ratio`: The ratio of packets that will be marked with a CE ECN codepoint
+  (the value must be between 0 and 1).
 - `network.bandwidth`: The one-way bandwidth of the network in bytes.
 
 ### Command line arguments
@@ -113,12 +116,12 @@ flags control other aspects of the simulation:
 ```
 --repeat <REPEAT>
     The amount of times the request should be repeated
-    
+
     [default: 10]
 
 --response-size <RESPONSE_SIZE>
     The size of each response, in bytes
-    
+
     [default: 1024]
 
 --non-deterministic
@@ -126,12 +129,12 @@ flags control other aspects of the simulation:
 
 --quinn-rng-seed <QUINN_RNG_SEED>
     Quinn's random seed, which you can control to generate deterministic results (Quinn uses randomness internally)
-    
+
     [default: 0]
 
 --simulated-network-rng-seed <SIMULATED_NETWORK_RNG_SEED>
     The random seed used for the simulated network (governing packet loss, duplication and reordering)
-    
+
     [default: 42]
 
 ```
