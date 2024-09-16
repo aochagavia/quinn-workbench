@@ -46,6 +46,9 @@ pub struct QuinnJsonConfig {
     /// If provided, disables congestion control and uses a fixed congestion window instead
     /// (specified in bytes).
     pub fixed_congestion_window: Option<u64>,
+    /// If true, configures congestion control to use a variant of `NewReno` that ignores packet
+    /// loss and only takes ECN into consideration.
+    pub use_ecn_based_reno: bool,
 }
 
 #[derive(Clone, Deserialize)]

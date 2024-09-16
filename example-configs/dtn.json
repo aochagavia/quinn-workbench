@@ -7,7 +7,7 @@
     "maximize_send_and_receive_windows": true,
     "max_ack_delay_ms": 18446744073709551615,
     "ack_eliciting_threshold": 10,
-    "fixed_congestion_window": 10240
+    "use_ecn_based_reno": true
   },
   "network": {
     "delay_ms": 5000,

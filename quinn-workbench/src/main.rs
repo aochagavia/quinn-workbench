@@ -11,8 +11,10 @@ use quinn::crypto::rustls::QuicClientConfig;
 use quinn::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use quinn::rustls::RootCertStore;
 use quinn::{ClientConfig, Endpoint, EndpointConfig, TransportConfig, VarInt};
+use quinn_extensions::ecn_cc::EcnCcFactory;
 use quinn_extensions::no_cc::NoCCConfig;
 use quinn_extensions::no_cid::NoConnectionIdGenerator;
+use quinn_proto::congestion::NewRenoConfig;
 use quinn_proto::AckFrequencyConfig;
 use rustls::pki_types::PrivatePkcs8KeyDer;
 use std::fs::File;
@@ -375,9 +377,15 @@ fn transport_config(quinn_config: Option<&QuinnJsonConfig>) -> TransportConfig {
         config.packet_threshold(quinn_config.packet_threshold);
 
         if let Some(congestion_window) = quinn_config.fixed_congestion_window {
+            assert!(!quinn_config.use_ecn_based_reno);
+
             config.congestion_controller_factory(Arc::new(NoCCConfig {
                 initial_window: congestion_window,
             }));
+        } else {
+            config.congestion_controller_factory(Arc::new(EcnCcFactory::new(
+                NewRenoConfig::default(),
+            )));
         }
 
         let mut ack_frequency_config = AckFrequencyConfig::default();
