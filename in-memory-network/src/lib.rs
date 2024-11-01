@@ -666,6 +666,14 @@ impl InMemoryNetwork {
                     );
                 }
 
+                if packet.transmit.ecn.is_some_and(|t| t == EcnCodepoint::Ce) {
+                    println!(
+                        "{:.2}s WARN {source} sent packet marked with CE ECN (#{})!",
+                        self.start.elapsed().as_secs_f64(),
+                        self.pcap_exporter.total_tracked_packets(),
+                    );
+                }
+
                 socket.enqueue_send(packet, metadata_index, extra_delay);
             }
 

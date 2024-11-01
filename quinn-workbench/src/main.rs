@@ -148,6 +148,10 @@ async fn run(
         "* Packet duplication ratio: {:.2}%",
         network_config.packet_duplication_ratio * 100.0
     );
+    println!(
+        "* ECN ratio: {:.2}%",
+        network_config.congestion_event_ratio * 100.0
+    );
 
     let mut quinn_rng = Rng::with_seed(quinn_rng_seed);
     let start = Instant::now();
