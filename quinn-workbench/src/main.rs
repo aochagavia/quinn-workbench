@@ -247,6 +247,10 @@ async fn run(
             stats.out_of_order.packets, stats.out_of_order.bytes
         );
         println!(
+            "  * From the above packets, {} were marked with the CE ECN codepoint",
+            stats.congestion_experienced
+        );
+        println!(
             "* {name} packets dropped: {} ({} bytes)",
             stats.dropped.packets, stats.dropped.bytes
         );

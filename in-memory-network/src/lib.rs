@@ -45,6 +45,7 @@ struct TransmitMetadata {
     out_of_order: bool,
     duplicate: bool,
     pcap_number: u64,
+    congestion_experienced: bool,
 }
 
 impl NetworkStatsTracker {
@@ -66,6 +67,7 @@ impl NetworkStatsTracker {
         size: usize,
         duplicate: bool,
         pcap_number: u64,
+        congestion_experienced: bool,
     ) -> usize {
         let mut inner = self.inner.lock().unwrap();
         let metadata_index = inner.transmits_metadata.len();
@@ -76,6 +78,7 @@ impl NetworkStatsTracker {
             out_of_order: false,
             duplicate,
             pcap_number,
+            congestion_experienced,
         });
 
         metadata_index
@@ -90,6 +93,7 @@ impl NetworkStatsTracker {
             out_of_order: false,
             duplicate: false,
             pcap_number,
+            congestion_experienced: false,
         });
     }
 }
@@ -105,6 +109,7 @@ pub struct EndpointStats {
     pub dropped: PacketStats,
     pub duplicates: PacketStats,
     pub out_of_order: PacketStats,
+    pub congestion_experienced: u64,
 }
 
 #[derive(Default)]
@@ -597,8 +602,9 @@ impl InMemoryNetwork {
             extra_delay = self.config.link_extra_delay;
         }
 
-        let roll3 = self.rng.lock().unwrap().f64();
-        if roll3 < self.config.congestion_event_ratio {
+        let congestion_experienced =
+            self.rng.lock().unwrap().f64() < self.config.congestion_event_ratio;
+        if congestion_experienced {
             // The Quinn-provided transmit must indicate support for ECN
             assert!(transmit
                 .ecn
@@ -656,6 +662,7 @@ impl InMemoryNetwork {
                     packet.transmit.contents.len(),
                     duplicate,
                     self.pcap_exporter.total_tracked_packets(),
+                    congestion_experienced,
                 );
 
                 if duplicate {
@@ -726,6 +733,10 @@ impl InMemoryNetwork {
             if metadata.duplicate {
                 endpoint_stats.duplicates.packets += 1;
                 endpoint_stats.duplicates.bytes += metadata.byte_size;
+            }
+
+            if metadata.congestion_experienced {
+                endpoint_stats.congestion_experienced += 1;
             }
         }
 
