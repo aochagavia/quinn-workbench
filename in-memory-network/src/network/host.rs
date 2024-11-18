@@ -8,33 +8,33 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::Instant;
 
-pub struct InMemorySocketHandle {
+pub struct HostHandle {
     pub network: Arc<InMemoryNetwork>,
     pub addr: SocketAddr,
 }
 
-impl Debug for InMemorySocketHandle {
+impl Debug for HostHandle {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "in memory socket ({})", self.addr)
+        write!(f, "host ({})", self.addr)
     }
 }
 
 #[derive(Clone)]
-pub struct InMemorySocket {
+pub struct Host {
     pub(in crate::network) addr: SocketAddr,
     pub(in crate::network) name: Arc<str>,
     pub(in crate::network) inbound: Arc<Mutex<InboundQueue>>,
 }
 
-impl InMemorySocket {
+impl Host {
     pub(crate) fn new(
         addr: SocketAddr,
         name: Arc<str>,
         config: &NetworkConfig,
         stats_tracker: NetworkStatsTracker,
         start: Instant,
-    ) -> InMemorySocket {
-        InMemorySocket {
+    ) -> Host {
+        Host {
             addr,
             name,
             inbound: Arc::new(Mutex::new(InboundQueue::new(

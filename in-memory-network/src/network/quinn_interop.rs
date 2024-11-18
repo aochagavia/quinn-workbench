@@ -1,4 +1,4 @@
-use crate::network::socket::InMemorySocketHandle;
+use crate::network::host::HostHandle;
 use crate::OwnedTransmit;
 use quinn::udp::{RecvMeta, Transmit};
 use quinn::{AsyncUdpSocket, UdpPoller};
@@ -18,7 +18,7 @@ impl UdpPoller for InMemoryUdpPoller {
     }
 }
 
-impl AsyncUdpSocket for InMemorySocketHandle {
+impl AsyncUdpSocket for HostHandle {
     fn create_io_poller(self: Arc<Self>) -> Pin<Box<dyn UdpPoller>> {
         Box::pin(InMemoryUdpPoller)
     }
@@ -48,8 +48,8 @@ impl AsyncUdpSocket for InMemorySocketHandle {
         bufs: &mut [IoSliceMut<'_>],
         meta: &mut [RecvMeta],
     ) -> Poll<std::io::Result<usize>> {
-        let socket = self.network.socket(self.addr);
-        let mut inbound = socket.inbound.lock().unwrap();
+        let host = self.network.host(self.addr);
+        let mut inbound = host.inbound.lock().unwrap();
 
         let max_transmits = meta.len();
         let mut received = 0;
