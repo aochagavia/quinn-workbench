@@ -2,15 +2,15 @@
 //!
 //! Provides an in-memory network with two peers and an arbitrary number of routers in between
 
+pub mod host;
 mod inbound_queue;
 pub mod quinn_interop;
-pub mod socket;
 
+use crate::network::host::{Host, HostHandle};
 use crate::network::inbound_queue::InboundQueue;
-use crate::network::socket::{InMemorySocket, InMemorySocketHandle};
 use crate::pcap_exporter::PcapExporter;
 use crate::stats_tracker::{EndpointStats, NetworkStats, NetworkStatsTracker};
-use crate::{InTransitData, NetworkConfig, OwnedTransmit, PEER_A_ADDR, PEER_B_ADDR};
+use crate::{InTransitData, NetworkConfig, OwnedTransmit, HOST_A_ADDR, HOST_B_ADDR};
 use fastrand::Rng;
 use quinn::udp::EcnCodepoint;
 use std::collections::HashMap;
@@ -23,7 +23,7 @@ use tokio::time::Instant;
 struct Router {
     link_configs: HashMap<SocketAddr, Arc<NetworkConfig>>,
     inbound: HashMap<SocketAddr, Mutex<InboundQueue>>,
-    outbound: HashMap<SocketAddr, InMemorySocket>,
+    outbound: HashMap<SocketAddr, Host>,
 }
 
 impl Router {
@@ -73,8 +73,8 @@ impl Router {
 }
 
 pub struct InMemoryNetwork {
-    peer_a_socket: InMemorySocket,
-    peer_b_socket: InMemorySocket,
+    host_a: Host,
+    host_b: Host,
     routers: Vec<Arc<Router>>,
     pcap_exporter: Arc<PcapExporter>,
     stats_tracker: NetworkStatsTracker,
@@ -95,15 +95,15 @@ impl InMemoryNetwork {
     ) -> Self {
         let stats_tracker = NetworkStatsTracker::new();
         let config = Arc::new(config);
-        let peer_a_socket = InMemorySocket::new(
-            PEER_A_ADDR,
+        let host_a = Host::new(
+            HOST_A_ADDR,
             Arc::from("Server".to_string().into_boxed_str()),
             &config,
             stats_tracker.clone(),
             start,
         );
-        let peer_b_socket = InMemorySocket::new(
-            PEER_B_ADDR,
+        let host_b = Host::new(
+            HOST_B_ADDR,
             Arc::from("Client".to_string().into_boxed_str()),
             &config,
             stats_tracker.clone(),
@@ -111,8 +111,8 @@ impl InMemoryNetwork {
         );
 
         let mut network = Self {
-            peer_a_socket: peer_a_socket.clone(),
-            peer_b_socket: peer_b_socket.clone(),
+            host_a: host_a.clone(),
+            host_b: host_b.clone(),
             routers: Vec::new(),
             pcap_exporter,
             stats_tracker,
@@ -122,12 +122,12 @@ impl InMemoryNetwork {
         };
 
         network.routers = vec![Arc::new(Router {
-            link_configs: [(PEER_A_ADDR, config.clone()), (PEER_B_ADDR, config.clone())]
+            link_configs: [(HOST_A_ADDR, config.clone()), (HOST_B_ADDR, config.clone())]
                 .into_iter()
                 .collect(),
             inbound: [
                 (
-                    PEER_A_ADDR,
+                    HOST_A_ADDR,
                     Mutex::new(InboundQueue::new(
                         config.link_delay,
                         config.link_capacity,
@@ -136,7 +136,7 @@ impl InMemoryNetwork {
                     )),
                 ),
                 (
-                    PEER_B_ADDR,
+                    HOST_B_ADDR,
                     Mutex::new(InboundQueue::new(
                         config.link_delay,
                         config.link_capacity,
@@ -147,7 +147,7 @@ impl InMemoryNetwork {
             ]
             .into_iter()
             .collect(),
-            outbound: [(PEER_A_ADDR, peer_a_socket), (PEER_B_ADDR, peer_b_socket)]
+            outbound: [(HOST_A_ADDR, host_a), (HOST_B_ADDR, host_b)]
                 .into_iter()
                 .collect(),
         })];
@@ -155,36 +155,36 @@ impl InMemoryNetwork {
         network
     }
 
-    /// Returns a handle to peer a's socket
-    pub fn peer_a_socket(self: &Arc<InMemoryNetwork>) -> InMemorySocketHandle {
-        InMemorySocketHandle {
-            addr: self.peer_a_socket.addr,
+    /// Returns a handle to host A
+    pub fn host_a(self: &Arc<InMemoryNetwork>) -> HostHandle {
+        HostHandle {
+            addr: self.host_a.addr,
             network: self.clone(),
         }
     }
 
-    /// Returns a handle to the peer b's socket
-    pub fn peer_b_socket(self: &Arc<InMemoryNetwork>) -> InMemorySocketHandle {
-        InMemorySocketHandle {
-            addr: self.peer_b_socket.addr,
+    /// Returns a handle to host B
+    pub fn host_b(self: &Arc<InMemoryNetwork>) -> HostHandle {
+        HostHandle {
+            addr: self.host_b.addr,
             network: self.clone(),
         }
     }
 
-    /// Returns the socket bound to the provided address
-    fn socket(&self, addr: SocketAddr) -> InMemorySocket {
-        [&self.peer_a_socket, &self.peer_b_socket]
+    /// Returns the host bound to the provided address
+    fn host(&self, addr: SocketAddr) -> Host {
+        [&self.host_a, &self.host_b]
             .into_iter()
             .find(|s| s.addr == addr)
             .cloned()
-            .expect("socket does not exist")
+            .expect("host does not exist")
     }
 
     /// Returns the router bound to the provided address
     fn router(&self, addr: SocketAddr) -> &Arc<Router> {
-        if addr == self.peer_a_socket.addr {
+        if addr == self.host_a.addr {
             self.routers.first().unwrap()
-        } else if addr == self.peer_b_socket.addr {
+        } else if addr == self.host_b.addr {
             self.routers.last().unwrap()
         } else {
             unreachable!("no router connected to the specified address");
@@ -193,7 +193,7 @@ impl InMemoryNetwork {
 
     /// Sends an [`OwnedTransmit`] to its destination
     fn send(&self, now: Instant, source_addr: SocketAddr, mut transmit: OwnedTransmit) {
-        let source = self.socket(source_addr).name;
+        let source = self.host(source_addr).name;
 
         let router = self.router(source_addr);
         let config = router.link_config(source_addr);
@@ -232,7 +232,7 @@ impl InMemoryNetwork {
             number: self.next_transmit_number.fetch_add(1, Ordering::Relaxed),
         };
 
-        // A packet could also be dropped if the socket doesn't have enough capacity
+        // A packet could also be dropped if the router doesn't have enough capacity
         if dropped || !router.has_enough_capacity(&data, duplicate) {
             self.pcap_exporter.track_packet(
                 now,
@@ -307,8 +307,8 @@ impl InMemoryNetwork {
 
         for metadata in &stats_tracker.transmits_metadata {
             let endpoint_stats = match metadata.source {
-                PEER_B_ADDR => &mut peer_b,
-                PEER_A_ADDR => &mut peer_a,
+                HOST_B_ADDR => &mut peer_b,
+                HOST_A_ADDR => &mut peer_a,
                 _ => unreachable!(),
             };
 
@@ -327,8 +327,8 @@ impl InMemoryNetwork {
             }
 
             let endpoint_stats = match metadata.source {
-                PEER_B_ADDR => &mut peer_b,
-                PEER_A_ADDR => &mut peer_a,
+                HOST_B_ADDR => &mut peer_b,
+                HOST_A_ADDR => &mut peer_a,
                 _ => unreachable!(),
             };
 

@@ -8,8 +8,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use tokio::time::Instant;
 
-const PEER_A_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(88, 88, 88, 88)), 8080);
-const PEER_B_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 8080);
+const HOST_A_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(88, 88, 88, 88)), 8080);
+const HOST_B_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 8080);
 
 pub struct NetworkConfig {
     pub congestion_event_ratio: f64,
@@ -143,8 +143,8 @@ mod test {
 
         // Network
         let network = default_network();
-        let server_socket = Arc::new(network.peer_a_socket());
-        let client_socket = Arc::new(network.peer_b_socket());
+        let server_socket = Arc::new(network.host_a());
+        let client_socket = Arc::new(network.host_b());
         let server_addr = server_socket.addr;
 
         // QUIC config

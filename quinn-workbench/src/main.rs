@@ -6,7 +6,7 @@ use clap::Parser;
 use config::cli::CliOpt;
 use config::json::{JsonConfig, QuinnJsonConfig};
 use fastrand::Rng;
-use in_memory_network::network::socket::InMemorySocketHandle;
+use in_memory_network::network::host::HostHandle;
 use in_memory_network::network::InMemoryNetwork;
 use in_memory_network::pcap_exporter::PcapExporter;
 use in_memory_network::NetworkConfig;
@@ -182,12 +182,12 @@ async fn run(
     ));
 
     // Let a server listen in the background
-    let server_socket = network.peer_a_socket();
-    let server_addr = server_socket.addr;
+    let server_host = network.host_a();
+    let server_addr = server_host.addr;
     let server = server_endpoint(
         cert.clone(),
         key.into(),
-        server_socket,
+        server_host,
         quinn_config,
         &mut quinn_rng,
     )?;
@@ -195,7 +195,7 @@ async fn run(
 
     // Make repeated requests
     println!("--- Requests ---");
-    let client = client_endpoint(cert, network.peer_b_socket(), quinn_config, &mut quinn_rng)?;
+    let client = client_endpoint(cert, network.host_b(), quinn_config, &mut quinn_rng)?;
     println!("0.00s CONNECT");
     let connection = client.connect(server_addr, server_name)?.await?;
 
@@ -293,7 +293,7 @@ async fn server_listen(endpoint: Endpoint, response_payload_size: usize) -> anyh
 fn server_endpoint(
     cert: CertificateDer<'static>,
     key: PrivateKeyDer<'static>,
-    server_socket: InMemorySocketHandle,
+    server_host: HostHandle,
     quinn_config: Option<&QuinnJsonConfig>,
     quinn_rng: &mut Rng,
 ) -> anyhow::Result<Endpoint> {
@@ -305,7 +305,7 @@ fn server_endpoint(
     Endpoint::new_with_abstract_socket(
         endpoint_config(seed),
         Some(server_config),
-        Arc::new(server_socket),
+        Arc::new(server_host),
         quinn::default_runtime().unwrap(),
     )
     .context("failed to create server endpoint")
@@ -313,7 +313,7 @@ fn server_endpoint(
 
 fn client_endpoint(
     server_cert: CertificateDer<'_>,
-    client_socket: InMemorySocketHandle,
+    client_host: HostHandle,
     quinn_config: Option<&QuinnJsonConfig>,
     quinn_rng: &mut Rng,
 ) -> anyhow::Result<Endpoint> {
@@ -323,7 +323,7 @@ fn client_endpoint(
     let mut endpoint = Endpoint::new_with_abstract_socket(
         endpoint_config(seed),
         None,
-        Arc::new(client_socket),
+        Arc::new(client_host),
         quinn::default_runtime().unwrap(),
     )
     .context("failed to create client endpoint")?;
