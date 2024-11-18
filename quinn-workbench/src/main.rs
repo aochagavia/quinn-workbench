@@ -183,7 +183,7 @@ async fn run(
 
     // Let a server listen in the background
     let server_host = network.host_a();
-    let server_addr = server_host.addr;
+    let server_addr = server_host.addr();
     let server = server_endpoint(
         cert.clone(),
         key.into(),

@@ -1,5 +1,5 @@
 use crate::stats_tracker::NetworkStatsTracker;
-use crate::{InTransitData, PrioritizedInTransitData};
+use crate::InTransitData;
 use std::collections::BinaryHeap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::Waker;
@@ -45,7 +45,7 @@ impl InboundQueue {
     pub(crate) fn send(
         &mut self,
         data: InTransitData,
-        metadata_index: usize,
+        metadata_index: Option<usize>,
         extra_delay: Duration,
     ) {
         assert!(self.has_enough_capacity(&data, false));
@@ -91,15 +91,18 @@ impl InboundQueue {
             {
                 let data = self.queue.pop().unwrap();
 
-                // Keep track of out-of-order packets
-                if data.data.number < highest_received {
-                    let pcap_number = self.stats_tracker.track_out_of_order(data.metadata_index);
-                    println!(
-                        "{:.2}s WARN Received reordered packet (#{pcap_number}) after it was delayed for extra {:.2}s",
-                        self.start.elapsed().as_secs_f64(),
-                        (data.delay - self.link_delay).as_secs_f64(),
-                    );
+                // Keep track of out-of-order packets if there's metadata about the packet
+                if let Some(metadata_index) = data.metadata_index {
+                    if data.data.number < highest_received {
+                        let pcap_number = self.stats_tracker.track_out_of_order(metadata_index);
+                        println!(
+                            "{:.2}s WARN Received reordered packet (#{pcap_number}) after it was delayed for extra {:.2}s",
+                            self.start.elapsed().as_secs_f64(),
+                            (data.delay - self.link_delay).as_secs_f64(),
+                        );
+                    }
                 }
+
                 highest_received = highest_received.max(data.data.number);
 
                 // Keep track of bytes in transit
@@ -119,5 +122,42 @@ impl InboundQueue {
 
     pub(crate) fn time_of_next_receive(&self) -> Option<Instant> {
         self.queue.peek().map(|x| x.arrival_time())
+    }
+}
+
+// In transit data, sorted by arrival time
+struct PrioritizedInTransitData {
+    data: InTransitData,
+    metadata_index: Option<usize>,
+    delay: Duration,
+}
+
+impl PrioritizedInTransitData {
+    fn arrival_time(&self) -> Instant {
+        self.data.last_sent + self.delay
+    }
+}
+
+impl Eq for PrioritizedInTransitData {}
+
+impl PartialEq<Self> for PrioritizedInTransitData {
+    fn eq(&self, other: &Self) -> bool {
+        self.arrival_time() == other.arrival_time() && self.data.number == other.data.number
+    }
+}
+
+impl PartialOrd<Self> for PrioritizedInTransitData {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PrioritizedInTransitData {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Note: the order is reversed, so the "max" in transit data will be the next one to be sent
+        other
+            .arrival_time()
+            .cmp(&self.arrival_time())
+            .then(other.data.number.cmp(&self.data.number))
     }
 }

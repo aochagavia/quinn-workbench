@@ -1,21 +1,26 @@
 use crate::network::inbound_queue::InboundQueue;
 use crate::network::InMemoryNetwork;
 use crate::stats_tracker::NetworkStatsTracker;
-use crate::{InTransitData, NetworkConfig};
+use crate::NetworkConfig;
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tokio::time::Instant;
 
 pub struct HostHandle {
     pub network: Arc<InMemoryNetwork>,
-    pub addr: SocketAddr,
+    pub(crate) host: Host,
+}
+
+impl HostHandle {
+    pub fn addr(&self) -> SocketAddr {
+        self.host.addr
+    }
 }
 
 impl Debug for HostHandle {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "host ({})", self.addr)
+        write!(f, "host ({})", self.addr())
     }
 }
 
@@ -44,19 +49,5 @@ impl Host {
                 start,
             ))),
         }
-    }
-
-    pub fn has_enough_capacity(&self, data: &InTransitData, duplicate: bool) -> bool {
-        self.inbound
-            .lock()
-            .unwrap()
-            .has_enough_capacity(data, duplicate)
-    }
-
-    pub fn enqueue_send(&self, data: InTransitData, metadata_index: usize, extra_delay: Duration) {
-        self.inbound
-            .lock()
-            .unwrap()
-            .send(data, metadata_index, extra_delay);
     }
 }
