@@ -9,3 +9,6 @@ pcap-file = { workspace = true }
 pnet_packet = { workspace = true }
 quinn = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+rcgen = { workspace = true }

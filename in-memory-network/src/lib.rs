@@ -552,7 +552,7 @@ impl InMemoryNetwork {
     }
 
     /// Returns a handle to the server's socket
-    pub fn server_socket(self: Arc<InMemoryNetwork>) -> InMemorySocketHandle {
+    pub fn server_socket(self: &Arc<InMemoryNetwork>) -> InMemorySocketHandle {
         InMemorySocketHandle {
             addr: self.sockets[0].addr,
             network: self.clone(),
@@ -560,7 +560,7 @@ impl InMemoryNetwork {
     }
 
     /// Returns a handle to the client's socket
-    pub fn client_socket(self: Arc<InMemoryNetwork>) -> InMemorySocketHandle {
+    pub fn client_socket(self: &Arc<InMemoryNetwork>) -> InMemorySocketHandle {
         InMemorySocketHandle {
             addr: self.sockets[1].addr,
             network: self.clone(),
@@ -809,5 +809,117 @@ impl Ord for PrioritizedInTransitData {
             .arrival_time()
             .cmp(&self.arrival_time())
             .then(other.data.number.cmp(&self.data.number))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use quinn::crypto::rustls::QuicClientConfig;
+    use quinn::rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+    use quinn::rustls::RootCertStore;
+    use quinn::{rustls, ClientConfig, Endpoint, EndpointConfig, ServerConfig};
+
+    fn default_network() -> Arc<InMemoryNetwork> {
+        Arc::new(InMemoryNetwork::initialize(
+            NetworkConfig {
+                congestion_event_ratio: 0.0,
+                packet_loss_ratio: 0.0,
+                packet_duplication_ratio: 0.0,
+                link_capacity: 1024 * 1024 * 10,
+                link_delay: Duration::from_millis(10),
+                link_extra_delay: Default::default(),
+                link_extra_delay_ratio: 0.0,
+            },
+            Arc::new(PcapExporter::new()),
+            Rng::with_seed(42),
+            Instant::now(),
+        ))
+    }
+
+    fn default_server_config() -> (&'static str, CertificateDer<'static>, ServerConfig) {
+        let server_name = "server-name";
+        let cert = rcgen::generate_simple_self_signed(vec![server_name.into()]).unwrap();
+        let key = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
+        let server_cert = CertificateDer::from(cert.cert);
+        let server_config =
+            ServerConfig::with_single_cert(vec![server_cert.clone()], key.into()).unwrap();
+        (server_name, server_cert, server_config)
+    }
+
+    fn default_client_config(server_cert: CertificateDer) -> ClientConfig {
+        let mut roots = RootCertStore::empty();
+        roots.add(server_cert).unwrap();
+
+        let default_provider = rustls::crypto::ring::default_provider();
+        let provider = rustls::crypto::CryptoProvider {
+            cipher_suites: vec![rustls::crypto::ring::cipher_suite::TLS13_AES_128_GCM_SHA256],
+            ..default_provider
+        };
+
+        let crypto = rustls::ClientConfig::builder_with_provider(provider.into())
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+
+        ClientConfig::new(Arc::new(QuicClientConfig::try_from(crypto).unwrap()))
+    }
+
+    #[tokio::test]
+    async fn quic_handshake_and_bidi_stream_works() {
+        let rt = quinn::default_runtime().unwrap();
+
+        // Network
+        let network = default_network();
+        let server_socket = Arc::new(network.server_socket());
+        let client_socket = Arc::new(network.client_socket());
+        let server_addr = server_socket.addr;
+
+        // QUIC config
+        let (server_name, server_cert, server_config) = default_server_config();
+        let client_config = default_client_config(server_cert);
+
+        // QUIC endpoints
+        let server_endpoint = Endpoint::new_with_abstract_socket(
+            EndpointConfig::default(),
+            Some(server_config),
+            server_socket,
+            rt.clone(),
+        )
+        .unwrap();
+        let mut client_endpoint =
+            Endpoint::new_with_abstract_socket(EndpointConfig::default(), None, client_socket, rt)
+                .unwrap();
+        client_endpoint.set_default_client_config(client_config);
+
+        // Run server in the background
+        let server_handle = tokio::spawn(async move {
+            let conn = server_endpoint.accept().await.unwrap().await.unwrap();
+            let (mut bi_tx, mut bi_rx) = conn.accept_bi().await.unwrap();
+
+            let msg = bi_rx.read_to_end(usize::MAX).await.unwrap();
+            assert_eq!(msg.as_slice(), b"hello");
+
+            bi_tx.write_all(b"world").await.unwrap();
+            bi_tx.finish().unwrap();
+            bi_tx.stopped().await.unwrap();
+        });
+
+        // Make a request from the client
+        let client_conn = client_endpoint
+            .connect(server_addr, server_name)
+            .unwrap()
+            .await
+            .unwrap();
+        let (mut client_bi_tx, mut client_bi_rx) = client_conn.open_bi().await.unwrap();
+        client_bi_tx.write_all(b"hello").await.unwrap();
+        client_bi_tx.finish().unwrap();
+
+        let msg = client_bi_rx.read_to_end(usize::MAX).await.unwrap();
+        assert_eq!(msg.as_slice(), b"world");
+
+        // The server should now be done
+        server_handle.await.unwrap();
     }
 }
