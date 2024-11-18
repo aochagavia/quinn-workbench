@@ -38,58 +38,29 @@ struct OwnedTransmit {
 pub struct InTransitData {
     source_addr: SocketAddr,
     transmit: OwnedTransmit,
-    sent: Instant,
+    last_sent: Instant,
     number: u64,
-}
-
-// In transit data, sorted by arrival time
-struct PrioritizedInTransitData {
-    data: InTransitData,
-    metadata_index: usize,
-    delay: Duration,
-}
-
-impl PrioritizedInTransitData {
-    fn arrival_time(&self) -> Instant {
-        self.data.sent + self.delay
-    }
-}
-
-impl Eq for PrioritizedInTransitData {}
-
-impl PartialEq<Self> for PrioritizedInTransitData {
-    fn eq(&self, other: &Self) -> bool {
-        self.arrival_time() == other.arrival_time() && self.data.number == other.data.number
-    }
-}
-
-impl PartialOrd<Self> for PrioritizedInTransitData {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for PrioritizedInTransitData {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Note: the order is reversed, so the "max" in transit data will be the next one to be sent
-        other
-            .arrival_time()
-            .cmp(&self.arrival_time())
-            .then(other.data.number.cmp(&self.data.number))
-    }
+    path: Vec<(Instant, network::NodeName)>,
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::network::InMemoryNetwork;
+    use crate::network::host::HostHandle;
+    use crate::network::{InMemoryNetwork, Node, NodeName};
     use crate::pcap_exporter::PcapExporter;
     use fastrand::Rng;
     use quinn::crypto::rustls::QuicClientConfig;
     use quinn::rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
     use quinn::rustls::RootCertStore;
-    use quinn::{rustls, ClientConfig, Endpoint, EndpointConfig, ServerConfig};
+    use quinn::udp::RecvMeta;
+    use quinn::{rustls, AsyncUdpSocket, ClientConfig, Endpoint, EndpointConfig, ServerConfig};
+    use std::future::Future;
+    use std::io;
+    use std::io::IoSliceMut;
+    use std::pin::Pin;
     use std::sync::Arc;
+    use std::task::{Context, Poll};
 
     fn default_network() -> Arc<InMemoryNetwork> {
         Arc::new(InMemoryNetwork::initialize(
@@ -138,14 +109,14 @@ mod test {
     }
 
     #[tokio::test]
-    async fn quic_handshake_and_bidi_stream_works() {
+    async fn test_quic_handshake_and_bidi_stream_works() {
         let rt = quinn::default_runtime().unwrap();
 
         // Network
         let network = default_network();
         let server_socket = Arc::new(network.host_a());
         let client_socket = Arc::new(network.host_b());
-        let server_addr = server_socket.addr;
+        let server_addr = server_socket.addr();
 
         // QUIC config
         let (server_name, server_cert, server_config) = default_server_config();
@@ -192,5 +163,103 @@ mod test {
 
         // The server should now be done
         server_handle.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_packet_arrives_at_expected_time() {
+        let network = default_network();
+        let mut packet_arrived_rx = network.subscribe_to_packet_arrived();
+
+        let start = Instant::now();
+        let data = network.in_transit_data(
+            start,
+            network.host_b().addr(),
+            OwnedTransmit {
+                destination: network.host_a().addr(),
+                ecn: None,
+                contents: b"hello world".to_vec(),
+                segment_size: None,
+            },
+        );
+        network.send(start, Node::Host(network.host_b.clone()), data);
+
+        let mut recv_result = BufsAndMeta::new();
+        let received = {
+            let host_receive = HostReceive {
+                host_handle: network.host_a(),
+                result: &mut recv_result,
+            };
+            host_receive.await.unwrap()
+        };
+
+        assert_eq!(received, 1);
+        assert_eq!(recv_result.meta[0].len, 11);
+        assert_eq!(&recv_result.bufs[0][..11], b"hello world");
+
+        let packet_arrived = packet_arrived_rx.recv().await.unwrap();
+
+        // This test proves that the packet travels a specific path and is delayed at each hop
+        let expected_timings = [
+            (
+                Duration::from_millis(0),
+                NodeName::Host("Client".to_string()),
+            ),
+            (
+                Duration::from_millis(10),
+                NodeName::Router("router2".to_string()),
+            ),
+            (
+                Duration::from_millis(20),
+                NodeName::Router("router1".to_string()),
+            ),
+            (
+                Duration::from_millis(30),
+                NodeName::Host("Server".to_string()),
+            ),
+        ];
+
+        assert_eq!(packet_arrived.path.len(), expected_timings.len());
+        for ((instant, node), (expected_duration, expected_node)) in
+            packet_arrived.path.into_iter().zip(expected_timings)
+        {
+            let duration = instant - start;
+            assert_eq!(node, expected_node);
+            assert_eq!(duration, expected_duration, "{node:?}");
+        }
+    }
+
+    // Utility future for testing a Host's `poll_recv`
+    struct HostReceive<'a> {
+        host_handle: HostHandle,
+        result: &'a mut BufsAndMeta,
+    }
+
+    struct BufsAndMeta {
+        bufs: Vec<Vec<u8>>,
+        meta: Vec<RecvMeta>,
+    }
+
+    impl BufsAndMeta {
+        fn new() -> Self {
+            Self {
+                bufs: vec![vec![0u8; 1500]; 4],
+                meta: vec![RecvMeta::default(); 4],
+            }
+        }
+    }
+
+    impl Future for HostReceive<'_> {
+        type Output = io::Result<usize>;
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            let this = &mut *self;
+
+            let host_handle = &mut this.host_handle;
+            let bufs = &mut this.result.bufs;
+            let meta = &mut this.result.meta;
+
+            let mut bufs: Vec<_> = bufs.iter_mut().map(|b| IoSliceMut::new(b)).collect();
+            host_handle.poll_recv(cx, &mut bufs, meta)
+        }
     }
 }

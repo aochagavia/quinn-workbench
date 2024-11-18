@@ -1,4 +1,5 @@
 use crate::network::host::HostHandle;
+use crate::network::{Node, NodeName};
 use crate::OwnedTransmit;
 use quinn::udp::{RecvMeta, Transmit};
 use quinn::{AsyncUdpSocket, UdpPoller};
@@ -28,9 +29,10 @@ impl AsyncUdpSocket for HostHandle {
         // packet
         assert!(transmit.segment_size.is_none());
 
-        self.network.send(
-            Instant::now(),
-            self.addr,
+        let now = Instant::now();
+        let data = self.network.in_transit_data(
+            now,
+            self.addr(),
             OwnedTransmit {
                 destination: transmit.destination,
                 ecn: transmit.ecn,
@@ -38,6 +40,7 @@ impl AsyncUdpSocket for HostHandle {
                 segment_size: transmit.segment_size,
             },
         );
+        self.network.send(now, Node::Host(self.host.clone()), data);
 
         Ok(())
     }
@@ -48,7 +51,7 @@ impl AsyncUdpSocket for HostHandle {
         bufs: &mut [IoSliceMut<'_>],
         meta: &mut [RecvMeta],
     ) -> Poll<std::io::Result<usize>> {
-        let host = self.network.host(self.addr);
+        let host = self.network.host(self.addr());
         let mut inbound = host.inbound.lock().unwrap();
 
         let max_transmits = meta.len();
@@ -58,6 +61,14 @@ impl AsyncUdpSocket for HostHandle {
         for (in_transit, (meta, buf)) in inbound.receive(max_transmits).into_iter().zip(out) {
             received += 1;
             let transmit = in_transit.transmit;
+
+            let mut path = in_transit.path;
+            path.push((
+                Instant::now(),
+                NodeName::Host(self.network.host(self.addr()).name.to_string()),
+            ));
+            self.network
+                .notify_packet_arrived(path, transmit.contents.clone());
 
             // Meta
             meta.addr = in_transit.source_addr;
@@ -79,6 +90,6 @@ impl AsyncUdpSocket for HostHandle {
     }
 
     fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        Ok(self.addr)
+        Ok(self.addr())
     }
 }
