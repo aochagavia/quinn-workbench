@@ -1,7 +1,3 @@
-//! In-memory network implementation
-//!
-//! Provides an in-memory network with two peers and an arbitrary number of routers in between
-
 pub mod network;
 pub mod pcap_exporter;
 mod stats_tracker;

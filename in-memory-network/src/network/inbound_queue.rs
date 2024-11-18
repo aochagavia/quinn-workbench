@@ -2,6 +2,7 @@ use crate::stats_tracker::NetworkStatsTracker;
 use crate::{InTransitData, PrioritizedInTransitData};
 use std::collections::BinaryHeap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::task::Waker;
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -13,6 +14,7 @@ pub struct InboundQueue {
     highest_received_transmit_number: AtomicU64,
     stats_tracker: NetworkStatsTracker,
     start: Instant,
+    notify_new_transmit: Option<Waker>,
 }
 
 impl InboundQueue {
@@ -30,6 +32,7 @@ impl InboundQueue {
             highest_received_transmit_number: Default::default(),
             stats_tracker,
             start,
+            notify_new_transmit: None,
         }
     }
 
@@ -52,13 +55,28 @@ impl InboundQueue {
             metadata_index,
             delay: self.link_delay + extra_delay,
         });
+
+        if let Some(waker) = self.notify_new_transmit.take() {
+            waker.wake();
+        }
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.queue.is_empty()
+    pub(crate) fn register_waker(&mut self, waker: Waker) {
+        if let Some(next_read) = self.time_of_next_receive() {
+            // Wake up next time we can read
+            tokio::task::spawn(async move {
+                tokio::time::sleep_until(next_read).await;
+                waker.wake();
+            });
+        } else {
+            // The queue is empty. Store the waker so we can be notified of new transmits.
+            if self.notify_new_transmit.is_none() {
+                self.notify_new_transmit = Some(waker)
+            }
+        }
     }
 
-    pub(crate) fn receive(&mut self, max_transmits: usize) -> impl Iterator<Item = InTransitData> {
+    pub(crate) fn receive(&mut self, max_transmits: usize) -> Vec<InTransitData> {
         let now = Instant::now();
         let mut highest_received = self
             .highest_received_transmit_number
@@ -96,10 +114,10 @@ impl InboundQueue {
         self.highest_received_transmit_number
             .store(highest_received, Ordering::Relaxed);
 
-        received.into_iter()
+        received
     }
 
-    pub(crate) fn time_of_next_receive(&self) -> Instant {
-        self.queue.peek().unwrap().arrival_time()
+    pub(crate) fn time_of_next_receive(&self) -> Option<Instant> {
+        self.queue.peek().map(|x| x.arrival_time())
     }
 }
