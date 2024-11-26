@@ -1,9 +1,10 @@
 use crate::network::inbound_queue::InboundQueue;
 use crate::network::{InMemoryNetwork, Node, NodeName};
 use crate::NetworkConfig;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::time::Instant;
 
 pub struct RouterHandle {
@@ -14,7 +15,7 @@ pub struct RouterHandle {
 impl RouterHandle {
     pub fn process_inbound(&self, source_addr: SocketAddr) {
         let inbound = &self.router.inbound[&source_addr];
-        if let Some(next_receive) = inbound.lock().unwrap().time_of_next_receive() {
+        if let Some(next_receive) = inbound.lock().time_of_next_receive() {
             let router = self.router.clone();
             let network = self.network.clone();
             tokio::spawn(async move {
@@ -22,7 +23,7 @@ impl RouterHandle {
                 tokio::time::sleep_until(next_receive).await;
 
                 // Now transfer inbound to outbound
-                let mut inbound = router.inbound[&source_addr].lock().unwrap();
+                let mut inbound = router.inbound[&source_addr].lock();
                 let transmits = inbound.receive(usize::MAX);
                 for mut transmit in transmits {
                     // Update the packet's path
