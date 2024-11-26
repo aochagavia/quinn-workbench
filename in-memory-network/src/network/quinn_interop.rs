@@ -52,7 +52,7 @@ impl AsyncUdpSocket for HostHandle {
         meta: &mut [RecvMeta],
     ) -> Poll<std::io::Result<usize>> {
         let host = self.network.host(self.addr());
-        let mut inbound = host.inbound.lock().unwrap();
+        let mut inbound = host.inbound.lock();
 
         let max_transmits = meta.len();
         let mut received = 0;

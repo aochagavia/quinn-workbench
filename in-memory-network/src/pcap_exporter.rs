@@ -1,4 +1,5 @@
 use crate::InTransitData;
+use parking_lot::Mutex;
 use pcap_file::pcapng::blocks::enhanced_packet::{EnhancedPacketBlock, EnhancedPacketOption};
 use pcap_file::pcapng::blocks::interface_description::InterfaceDescriptionBlock;
 use pcap_file::pcapng::blocks::section_header::SectionHeaderBlock;
@@ -12,7 +13,6 @@ use quinn::udp::EcnCodepoint;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -54,7 +54,7 @@ impl PcapExporter {
 
     pub fn save(&self, path: &Path) {
         let dummy_writer = PcapNgWriter::new(Vec::new()).unwrap();
-        let mut writer = self.writer.lock().unwrap();
+        let mut writer = self.writer.lock();
         let writer = std::mem::replace(&mut *writer, dummy_writer);
         let bytes = writer.into_inner();
         std::fs::write(path, bytes).unwrap();
@@ -139,7 +139,7 @@ impl PcapExporter {
             ));
         }
 
-        let mut writer = self.writer.lock().unwrap();
+        let mut writer = self.writer.lock();
         writer
             .write_pcapng_block(EnhancedPacketBlock {
                 interface_id: 0,

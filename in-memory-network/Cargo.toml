@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 fastrand = { workspace = true }
+parking_lot = "0.12.3"
 pcap-file = { workspace = true }
 pnet_packet = { workspace = true }
 quinn = { workspace = true }

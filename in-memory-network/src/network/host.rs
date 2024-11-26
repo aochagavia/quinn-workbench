@@ -2,9 +2,10 @@ use crate::network::inbound_queue::InboundQueue;
 use crate::network::InMemoryNetwork;
 use crate::stats_tracker::NetworkStatsTracker;
 use crate::NetworkConfig;
+use parking_lot::Mutex;
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::time::Instant;
 
 pub struct HostHandle {

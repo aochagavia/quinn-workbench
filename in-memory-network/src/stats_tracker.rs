@@ -1,5 +1,6 @@
+use parking_lot::Mutex;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub(crate) struct NetworkStatsTracker {
@@ -30,7 +31,7 @@ impl NetworkStatsTracker {
     }
 
     pub fn track_out_of_order(&self, metadata_index: usize) -> u64 {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         inner.transmits_metadata[metadata_index].out_of_order = true;
         inner.transmits_metadata[metadata_index].pcap_number
     }
@@ -43,7 +44,7 @@ impl NetworkStatsTracker {
         pcap_number: u64,
         congestion_experienced: bool,
     ) -> usize {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         let metadata_index = inner.transmits_metadata.len();
         inner.transmits_metadata.push(TransmitMetadata {
             source,
@@ -59,7 +60,7 @@ impl NetworkStatsTracker {
     }
 
     pub fn track_dropped(&self, source: SocketAddr, size: usize, pcap_number: u64) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         inner.transmits_metadata.push(TransmitMetadata {
             source,
             byte_size: size,

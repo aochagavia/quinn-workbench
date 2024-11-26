@@ -13,12 +13,13 @@ use crate::pcap_exporter::PcapExporter;
 use crate::stats_tracker::{EndpointStats, NetworkStats, NetworkStatsTracker};
 use crate::{InTransitData, NetworkConfig, OwnedTransmit, HOST_A_ADDR, HOST_B_ADDR};
 use fastrand::Rng;
+use parking_lot::Mutex;
 use quinn::udp::EcnCodepoint;
 use router::Router;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -296,19 +297,19 @@ impl InMemoryNetwork {
         let transmit_destination_addr = data.transmit.destination;
         let config = self.get_link_config(&source, data.transmit.destination);
 
-        let roll1 = self.rng.lock().unwrap().f64();
+        let roll1 = self.rng.lock().f64();
         if roll1 < config.packet_loss_ratio {
             dropped = true;
         } else if roll1 < config.packet_loss_ratio + config.packet_duplication_ratio {
             duplicate = true;
         }
 
-        let roll2 = self.rng.lock().unwrap().f64();
+        let roll2 = self.rng.lock().f64();
         if roll2 < config.link_extra_delay_ratio {
             extra_delay = config.link_extra_delay;
         }
 
-        let congestion_experienced = self.rng.lock().unwrap().f64() < config.congestion_event_ratio;
+        let congestion_experienced = self.rng.lock().f64() < config.congestion_event_ratio;
         if congestion_experienced {
             // The Quinn-provided transmit must indicate support for ECN
             assert!(data
@@ -327,7 +328,7 @@ impl InMemoryNetwork {
         );
 
         // A packet could also be dropped if the target doesn't have enough capacity
-        let dropped = dropped || !queue.lock().unwrap().has_enough_capacity(&data, duplicate);
+        let dropped = dropped || !queue.lock().has_enough_capacity(&data, duplicate);
         if dropped {
             // Only track lost packets for hosts, not for routers
             if let Node::Host(source) = &source {
@@ -396,10 +397,7 @@ impl InMemoryNetwork {
                     }
                 }
 
-                queue
-                    .lock()
-                    .unwrap()
-                    .send(packet, metadata_index, extra_delay);
+                queue.lock().send(packet, metadata_index, extra_delay);
             }
         }
 
@@ -418,7 +416,7 @@ impl InMemoryNetwork {
     }
 
     pub fn stats(&self) -> NetworkStats {
-        let stats_tracker = self.stats_tracker.inner.lock().unwrap();
+        let stats_tracker = self.stats_tracker.inner.lock();
 
         let mut peer_a = EndpointStats::default();
         let mut peer_b = EndpointStats::default();
