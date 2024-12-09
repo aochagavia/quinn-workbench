@@ -15,7 +15,7 @@ client.
 - Inspectable. Next to informative command-line output and statistics, the application generates a
   synthetic pcap file, so you can examine the traffic in more detail using Wireshark.
 - Configurable network settings and QUIC parameters through reusable JSON config files (see
-  `example-configs` and [JSON config details](#json-config-details)).
+  `test-data/configs` and [JSON config details](#json-config-details)).
 - Configurable simulation behavior through command-line arguments (see `cargo run --release --
   --help`).
 
@@ -24,25 +24,25 @@ client.
 After [installing Rust](https://rustup.rs/), you can get started with:
 
 ```bash
-cargo run --release -- --config example-configs/dtn.json
+cargo run --release -- --config test-data/configs/dtn.json
 ```
 
 Here's an example issuing a single request and receiving a 10 MiB response:
 
 ```bash
-cargo run --release -- --config example-configs/terrestrial-internet.json --repeat 1 --response-size 10485760
+cargo run --release -- --config test-data/configs/terrestrial-internet.json --repeat 1 --response-size 10485760
 ```
 
 Here's an example controlling the random seeds (which otherwise use a hardcoded constant):
 
 ```bash
-cargo run --release -- --config example-configs/terrestrial-internet.json --quinn-rng-seed 1234 --simulated-network-rng-seed 1337
+cargo run --release -- --config test-data/configs/terrestrial-internet.json --quinn-rng-seed 1234 --simulated-network-rng-seed 1337
 ```
 
 Here's an example using random seeds derived from a source of entropy:
 
 ```bash
-cargo run --release -- --config example-configs/terrestrial-internet.json --non-deterministic
+cargo run --release -- --config test-data/configs/terrestrial-internet.json --non-deterministic
 ```
 
 ### JSON config details
