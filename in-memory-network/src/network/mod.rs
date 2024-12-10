@@ -2,42 +2,38 @@
 //!
 //! Provides an in-memory network with two peers and an arbitrary number of routers in between
 
-pub mod host;
-mod inbound_queue;
-pub mod quinn_interop;
-mod router;
+pub mod event;
+pub(crate) mod inbound_queue;
+pub mod link;
+pub mod node;
+pub mod route;
+pub mod spec;
 
-use crate::network::host::{Host, HostHandle};
+use crate::network::event::NetworkEvent;
 use crate::network::inbound_queue::InboundQueue;
+use crate::network::link::LinkStatus;
+use crate::network::node::{Host, HostHandle, Node};
+use crate::network::spec::{NetworkSpec, NodeKind};
 use crate::pcap_exporter::PcapExporter;
 use crate::stats_tracker::{EndpointStats, NetworkStats, NetworkStatsTracker};
-use crate::{InTransitData, NetworkConfig, OwnedTransmit, HOST_A_ADDR, HOST_B_ADDR};
+use crate::{InTransitData, OwnedTransmit};
+use anyhow::bail;
 use fastrand::Rng;
+use link::NetworkLink;
+use node::Router;
 use parking_lot::Mutex;
 use quinn::udp::EcnCodepoint;
-use router::Router;
+use route::Route;
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
 
-#[derive(Clone)]
-pub enum Node {
-    Router(String),
-    Host(Host),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum NodeName {
-    Router(String),
-    Host(String),
-}
-
 #[derive(Clone, Debug)]
 pub struct PacketArrived {
-    pub path: Vec<(Instant, NodeName)>,
+    pub path: Vec<(Instant, Arc<str>)>,
     pub content: Vec<u8>,
 }
 
@@ -45,12 +41,14 @@ pub struct PacketArrived {
 pub struct InMemoryNetwork {
     pub(crate) host_a: Host,
     pub(crate) host_b: Host,
-    /// The router connected to host A
-    host_a_router: Arc<Router>,
-    /// The router connected to host B
-    host_b_router: Arc<Router>,
-    /// Map from router names to the corresponding router object
-    router_map: Arc<HashMap<String, Arc<Router>>>,
+    /// Map from socket addresses to the corresponding host object
+    hosts_by_addr: HashMap<SocketAddr, Host>,
+    /// Map from ip addresses to the corresponding router object
+    routers_by_addr: Arc<HashMap<IpAddr, Arc<Router>>>,
+    /// Map from ip addresses to the available route information
+    routes_by_addr: Arc<HashMap<IpAddr, Arc<Vec<Route>>>>,
+    /// Map from ip address pairs to the corresponding links
+    links: Arc<HashMap<(IpAddr, IpAddr), Arc<Mutex<NetworkLink>>>>,
     pcap_exporter: Arc<PcapExporter>,
     stats_tracker: NetworkStatsTracker,
     rng: Mutex<Rng>,
@@ -61,113 +59,124 @@ pub struct InMemoryNetwork {
 }
 
 impl InMemoryNetwork {
-    /// Initializes a new [`InMemoryNetwork`] with two peers
-    ///
-    /// The link capacity is measured in bytes per `link_delay`
+    /// Initializes a new [`InMemoryNetwork`] based on the provided spec
     pub fn initialize(
-        config: NetworkConfig,
+        network_spec: NetworkSpec,
+        _events: Vec<NetworkEvent>,
         pcap_exporter: Arc<PcapExporter>,
         rng: Rng,
         start: Instant,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
+        let mut routes_by_addr = HashMap::new();
+        let routes = network_spec
+            .nodes
+            .iter()
+            .map(|n| (&n.interfaces, &n.routes));
+        for (interfaces, routes) in routes {
+            for &addr in interfaces.iter().flat_map(|i| &i.addresses) {
+                routes_by_addr.insert(addr, Arc::new(routes.clone()));
+            }
+        }
+
+        let (mut hosts, routers): (Vec<_>, _) = network_spec
+            .nodes
+            .into_iter()
+            .partition(|n| n.kind == NodeKind::Host);
+        if hosts.is_empty() {
+            bail!("Expected exactly two hosts in network graph, found zero");
+        } else if hosts.len() != 2 {
+            let ids: Vec<_> = hosts.into_iter().map(|h| h.id).collect();
+            bail!(
+                "Expected exactly two hosts in network graph, found a different amount: {}",
+                ids.join(", ")
+            );
+        }
+
         let stats_tracker = NetworkStatsTracker::new();
-        let config = Arc::new(config);
-        let host_a = Host::new(
-            HOST_A_ADDR,
-            Arc::from("Server".to_string().into_boxed_str()),
-            &config,
-            stats_tracker.clone(),
-            start,
-        );
-        let host_b = Host::new(
-            HOST_B_ADDR,
-            Arc::from("Client".to_string().into_boxed_str()),
-            &config,
-            stats_tracker.clone(),
-            start,
-        );
-        let host_a_router = Arc::new(Router {
-            name: "router1".to_string(),
-            link_configs: [(HOST_A_ADDR, config.clone()), (HOST_B_ADDR, config.clone())]
-                .into_iter()
-                .collect(),
-            inbound: [
-                (
-                    HOST_A_ADDR,
-                    Mutex::new(InboundQueue::new(
-                        config.link_delay,
-                        config.link_capacity,
-                        stats_tracker.clone(),
-                        start,
-                    )),
-                ),
-                (
-                    HOST_B_ADDR,
-                    Mutex::new(InboundQueue::new(
-                        config.link_delay,
-                        config.link_capacity,
-                        stats_tracker.clone(),
-                        start,
-                    )),
-                ),
-            ]
+        let host_a = hosts.remove(0);
+        let host_a = Host::from_network_node(host_a, stats_tracker.clone(), start)?;
+        let host_b = hosts.remove(0);
+        let host_b = Host::from_network_node(host_b, stats_tracker.clone(), start)?;
+        let hosts_by_addr = [host_a.clone(), host_b.clone()]
             .into_iter()
-            .collect(),
-            outbound: [
-                (HOST_A_ADDR, Node::Host(host_a.clone())),
-                (HOST_B_ADDR, Node::Router("router2".to_string())),
-            ]
-            .into_iter()
-            .collect(),
-        });
-        let host_b_router = Arc::new(Router {
-            name: "router2".to_string(),
-            link_configs: [(HOST_A_ADDR, config.clone()), (HOST_B_ADDR, config.clone())]
-                .into_iter()
-                .collect(),
-            inbound: [
-                (
-                    HOST_A_ADDR,
-                    Mutex::new(InboundQueue::new(
-                        config.link_delay,
-                        config.link_capacity,
-                        stats_tracker.clone(),
-                        start,
-                    )),
-                ),
-                (
-                    HOST_B_ADDR,
-                    Mutex::new(InboundQueue::new(
-                        config.link_delay,
-                        config.link_capacity,
-                        stats_tracker.clone(),
-                        start,
-                    )),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-            outbound: [
-                (HOST_A_ADDR, Node::Router("router1".to_string())),
-                (HOST_B_ADDR, Node::Host(host_b.clone())),
-            ]
-            .into_iter()
-            .collect(),
-        });
+            .map(|h| (h.addr, h))
+            .collect();
+
+        if host_a.addr.ip() == host_b.addr.ip() {
+            bail!(
+                "Expected hosts to have different ip addresses, found the same: {}",
+                host_a.addr.ip()
+            );
+        }
+
+        let mut links = HashMap::new();
+        for l in network_spec.links {
+            let source = l.source;
+            let target = l.target;
+            let l = Arc::new(Mutex::new(NetworkLink {
+                id: l.id,
+                status: LinkStatus::Up,
+                target,
+                queue: InboundQueue::new(l.delay, l.capacity_bytes, stats_tracker.clone(), start),
+                congestion_event_ratio: l.congestion_event_ratio,
+                packet_loss_ratio: l.packet_loss_ratio,
+                packet_duplication_ratio: l.packet_duplication_ratio,
+                extra_delay: l.extra_delay,
+                extra_delay_ratio: l.extra_delay_ratio,
+            }));
+            let conflicting_link = links.insert((source, target), l.clone());
+            if let Some(conflicting_link) = conflicting_link {
+                bail!(
+                    "links {} and {} share the same address pair: {} -> {}",
+                    l.lock().id,
+                    conflicting_link.lock().id,
+                    source,
+                    target
+                );
+            }
+        }
+
+        let mut routers_by_addr = HashMap::new();
+        for r in routers {
+            let addresses: Vec<_> = r.interfaces.into_iter().flat_map(|i| i.addresses).collect();
+            if addresses.is_empty() {
+                bail!("found router with no addresses: {}", r.id);
+            }
+
+            let mut inbound_links = HashMap::new();
+            for (&(source, target), link) in &links {
+                if addresses.contains(&target) {
+                    inbound_links.insert(source, link.clone());
+                }
+            }
+
+            let router = Arc::new(Router {
+                id: Arc::from(r.id.into_boxed_str()),
+                addresses: addresses.clone(),
+            });
+
+            for address in addresses {
+                let address_taken = routers_by_addr.insert(address, router.clone());
+                if let Some(conflicting_router) = address_taken {
+                    bail!(
+                        "routers {} and {} share the same address: {}",
+                        router.id,
+                        conflicting_router.id,
+                        address
+                    );
+                }
+            }
+        }
 
         let (tx, rx) = tokio::sync::broadcast::channel(10);
 
-        Self {
+        Ok(Self {
             host_a,
-            host_a_router: host_a_router.clone(),
             host_b,
-            host_b_router: host_b_router.clone(),
-            router_map: Arc::new(
-                [host_a_router, host_b_router]
-                    .into_iter()
-                    .map(|r| (r.name.clone(), r))
-                    .collect(),
-            ),
+            hosts_by_addr,
+            routers_by_addr: Arc::new(routers_by_addr),
+            routes_by_addr: Arc::new(routes_by_addr),
+            links: Arc::new(links),
             pcap_exporter,
             stats_tracker,
             rng: Mutex::new(rng),
@@ -175,7 +184,7 @@ impl InMemoryNetwork {
             next_transmit_number: Default::default(),
             packet_arrived_tx: tx,
             packet_arrived_rx: rx,
-        }
+        })
     }
 
     pub fn subscribe_to_packet_arrived(&self) -> tokio::sync::broadcast::Receiver<PacketArrived> {
@@ -199,36 +208,86 @@ impl InMemoryNetwork {
     }
 
     /// Returns the host bound to the provided address
-    fn host(&self, addr: SocketAddr) -> &Host {
-        [&self.host_a, &self.host_b]
-            .into_iter()
-            .find(|s| s.addr == addr)
-            .expect("host does not exist")
+    pub(crate) fn host(&self, addr: SocketAddr) -> &Host {
+        &self.hosts_by_addr[&addr]
     }
 
-    /// Returns the router bound to the provided address
-    fn router(&self, addr: SocketAddr) -> &Arc<Router> {
-        if addr == self.host_a.addr {
-            &self.host_a_router
-        } else if addr == self.host_b.addr {
-            &self.host_b_router
-        } else {
-            unreachable!("no router connected to the specified address");
+    pub async fn assert_connectivity_between_hosts(self: &Arc<Self>) -> anyhow::Result<()> {
+        let now = Instant::now();
+
+        let peers = [
+            (&self.host_a, self.host_b.addr),
+            (&self.host_b, self.host_a.addr),
+        ];
+
+        // Send a packet both ways
+        for (source, target_addr) in peers {
+            let data = self.in_transit_data(
+                now,
+                source.addr,
+                OwnedTransmit {
+                    destination: target_addr,
+                    ecn: None,
+                    contents: vec![42],
+                    segment_size: None,
+                },
+            );
+
+            self.send(now, source, data);
+        }
+
+        // Wait for 90 days for the packets to arrive
+        let days = 90;
+        tokio::time::sleep(Duration::from_secs(3600 * 24 * days)).await;
+
+        // Ensure the packets arrived at each host
+        let a_to_b_failed = self.host_b.inbound.lock().receive(1).is_empty();
+        let b_to_a_failed = self.host_a.inbound.lock().receive(1).is_empty();
+
+        if a_to_b_failed || b_to_a_failed {
+            let report = |failed| if failed { "failed" } else { "succeeded" };
+            bail!("failed to deliver packets between the hosts after {days} days (A to B {}, B to A {})", report(a_to_b_failed), report(b_to_a_failed));
+        }
+
+        Ok(())
+    }
+
+    fn node_to_host(&self, node: &impl Node) -> Option<&Host> {
+        let mut addresses = node.addresses();
+        match (addresses.next(), addresses.next()) {
+            (Some(addr), None) => self
+                .hosts_by_addr
+                .iter()
+                .find(|(key, _)| key.ip() == addr)
+                .map(|(_, host)| host),
+            _ => None,
         }
     }
 
-    fn get_link_config(&self, source: &Node, destination: SocketAddr) -> &NetworkConfig {
-        match source {
-            Node::Router(name) => {
-                // Link between a router and another node
-                self.router_map[name].link_config(destination)
-            }
-            Node::Host(source) => {
-                // Link between a host and a router
-                let router = self.router(source.addr);
-                router.link_config(source.addr)
+    /// Resolves the link that should be used to go from the node to the destination
+    ///
+    /// Uses the node's routing table to identify the next hop's link
+    fn resolve_link(
+        &self,
+        node: &impl Node,
+        destination: SocketAddr,
+    ) -> Option<Arc<Mutex<NetworkLink>>> {
+        for node_addr in node.addresses() {
+            let routes = &self.routes_by_addr[&node_addr];
+            let Some(next_hop_addr) = routes
+                .iter()
+                .find_map(|r| r.next_hop_towards_destination(destination.ip()))
+            else {
+                // No route found for this node's address, try another one
+                continue;
+            };
+
+            if let Some(link) = self.links.get(&(node_addr, next_hop_addr)) {
+                return Some(link.clone());
             }
         }
+
+        None
     }
 
     pub(crate) fn in_transit_data(
@@ -243,73 +302,54 @@ impl InMemoryNetwork {
             transmit,
             last_sent: now,
             number: self.next_transmit_number.fetch_add(1, Ordering::Relaxed),
-            path: vec![(now, NodeName::Host(source_host.name.to_string()))],
+            path: vec![(now, source_host.id.clone())],
         }
     }
 
-    fn inbound_queue_for_destination(
-        &self,
-        source: &Node,
-        source_addr: SocketAddr,
-        destination: SocketAddr,
-    ) -> &Mutex<InboundQueue> {
-        if let Some(router) = self.target_router_for_destination(source, destination) {
-            &router.inbound[&source_addr]
-        } else {
-            // Destination is a host
-            &self.host(destination).inbound
-        }
-    }
-
-    fn target_router_for_destination(
-        &self,
-        source: &Node,
-        destination: SocketAddr,
-    ) -> Option<&Arc<Router>> {
-        match source {
-            Node::Host(source) => {
-                // Hosts are always associated to a router for sending
-                Some(self.router(source.addr))
-            }
-            Node::Router(source_router) => {
-                // A router might have a link to another router, or to a host
-                let router = &self.router_map[source_router];
-                match &router.outbound[&destination] {
-                    Node::Router(target_router) => Some(&self.router_map[target_router]),
-                    Node::Host(_) => None,
-                }
-            }
-        }
-    }
-
-    /// Sends an [`InTransitData`] from a host to its destination
+    /// Sends an [`InTransitData`] from one node to the next
     pub(crate) fn send(
         self: &Arc<InMemoryNetwork>,
         now: Instant,
-        source: Node,
+        previous_node: &impl Node,
         mut data: InTransitData,
     ) {
         data.last_sent = now;
         let mut dropped = false;
         let mut duplicate = false;
+        let congestion_experienced;
         let mut extra_delay = Duration::from_secs(0);
-        let transmit_source_addr = data.source_addr;
         let transmit_destination_addr = data.transmit.destination;
-        let config = self.get_link_config(&source, data.transmit.destination);
 
-        let roll1 = self.rng.lock().f64();
-        if roll1 < config.packet_loss_ratio {
-            dropped = true;
-        } else if roll1 < config.packet_loss_ratio + config.packet_duplication_ratio {
-            duplicate = true;
+        let Some(link) = self.resolve_link(previous_node, data.transmit.destination) else {
+            let nodes: Vec<_> = data.path.into_iter().map(|(_, n)| n).collect();
+            let mut path = nodes.join(" -> ");
+            path.push_str(" -> ?");
+
+            println!(
+                "Network error: missing link to {} ({path})",
+                data.transmit.destination
+            );
+            return;
+        };
+
+        // Concurrency: limit the lock guard's lifetime
+        {
+            let link = link.lock();
+            let roll1 = self.rng.lock().f64();
+            if roll1 < link.packet_loss_ratio {
+                dropped = true;
+            } else if roll1 < link.packet_loss_ratio + link.packet_duplication_ratio {
+                duplicate = true;
+            }
+
+            let roll2 = self.rng.lock().f64();
+            if roll2 < link.extra_delay_ratio {
+                extra_delay = link.extra_delay;
+            }
+
+            congestion_experienced = self.rng.lock().f64() < link.congestion_event_ratio;
         }
 
-        let roll2 = self.rng.lock().f64();
-        if roll2 < config.link_extra_delay_ratio {
-            extra_delay = config.link_extra_delay;
-        }
-
-        let congestion_experienced = self.rng.lock().f64() < config.congestion_event_ratio;
         if congestion_experienced {
             // The Quinn-provided transmit must indicate support for ECN
             assert!(data
@@ -321,18 +361,12 @@ impl InMemoryNetwork {
             data.transmit.ecn = Some(EcnCodepoint::from_bits(0b11).unwrap())
         }
 
-        let queue = self.inbound_queue_for_destination(
-            &source,
-            transmit_source_addr,
-            transmit_destination_addr,
-        );
-
         // A packet could also be dropped if the target doesn't have enough capacity
-        let dropped = dropped || !queue.lock().has_enough_capacity(&data, duplicate);
+        let dropped = dropped || !link.lock().queue.has_enough_capacity(&data, duplicate);
         if dropped {
             // Only track lost packets for hosts, not for routers
-            if let Node::Host(source) = &source {
-                let source_name = &source.name;
+            if let Some(source) = self.node_to_host(previous_node) {
+                let source_name = &source.id;
                 self.pcap_exporter.track_packet(
                     now,
                     &data,
@@ -362,8 +396,8 @@ impl InMemoryNetwork {
                 let mut metadata_index = None;
 
                 // Only track duplicate packets for hosts, not for routers
-                if let Node::Host(source) = &source {
-                    let source_name = &source.name;
+                if let Some(source) = self.node_to_host(previous_node) {
+                    let source_name = &source.id;
                     self.pcap_exporter.track_packet(
                         now,
                         &packet,
@@ -397,19 +431,36 @@ impl InMemoryNetwork {
                     }
                 }
 
-                queue.lock().send(packet, metadata_index, extra_delay);
+                link.lock().queue.send(packet, metadata_index, extra_delay);
             }
         }
 
-        // If the destination is a router, we need to manually trigger it to process inbound traffic
-        // (hosts do so automatically, because quinn polls them)
-        if let Some(router) = self.target_router_for_destination(&source, transmit_destination_addr)
-        {
-            router.handle(self).process_inbound(transmit_source_addr);
-        }
+        // Schedule the packet to be forwarded at the `next_receive` instant
+        let next_receive = link.lock().queue.time_of_next_receive().unwrap();
+        if let Some(router) = self.routers_by_addr.get(&link.lock().target) {
+            // The packet should be forwarded to the next router, after which it needs to be sent to
+            // the next hop (hence the `network.send`)
+            let network = self.clone();
+            let router = router.clone();
+            schedule_forward_packet(link.clone(), next_receive, move |mut transmit| {
+                // Update the packet's path
+                transmit.path.push((Instant::now(), router.id.clone()));
+
+                // Send to next hop
+                network.send(Instant::now(), &*router, transmit);
+            });
+        } else {
+            // The packet should be forwarded to the final host's inbound queue (from where it will
+            // be automatically picked up by quinn)
+            let host = self.hosts_by_addr.get(&transmit_destination_addr).unwrap();
+            let host_queue = host.inbound.clone();
+            schedule_forward_packet(link.clone(), next_receive, move |transmit| {
+                host_queue.lock().send(transmit, None, Duration::default())
+            });
+        };
     }
 
-    fn notify_packet_arrived(&self, path: Vec<(Instant, NodeName)>, content: Vec<u8>) {
+    pub(crate) fn notify_packet_arrived(&self, path: Vec<(Instant, Arc<str>)>, content: Vec<u8>) {
         self.packet_arrived_tx
             .send(PacketArrived { path, content })
             .unwrap();
@@ -418,13 +469,15 @@ impl InMemoryNetwork {
     pub fn stats(&self) -> NetworkStats {
         let stats_tracker = self.stats_tracker.inner.lock();
 
+        let peer_a_addr = self.host_a.addr;
         let mut peer_a = EndpointStats::default();
+        let peer_b_addr = self.host_b.addr;
         let mut peer_b = EndpointStats::default();
 
         for metadata in &stats_tracker.transmits_metadata {
             let endpoint_stats = match metadata.source {
-                HOST_B_ADDR => &mut peer_b,
-                HOST_A_ADDR => &mut peer_a,
+                addr if addr == peer_a_addr => &mut peer_b,
+                addr if addr == peer_b_addr => &mut peer_a,
                 _ => unreachable!(),
             };
 
@@ -443,8 +496,8 @@ impl InMemoryNetwork {
             }
 
             let endpoint_stats = match metadata.source {
-                HOST_B_ADDR => &mut peer_b,
-                HOST_A_ADDR => &mut peer_a,
+                addr if addr == peer_a_addr => &mut peer_b,
+                addr if addr == peer_b_addr => &mut peer_a,
                 _ => unreachable!(),
             };
 
@@ -465,4 +518,22 @@ impl InMemoryNetwork {
 
         NetworkStats { peer_b, peer_a }
     }
+}
+
+fn schedule_forward_packet(
+    link: Arc<Mutex<NetworkLink>>,
+    next_receive: Instant,
+    handle_transmit: impl Fn(InTransitData) + Send + 'static,
+) {
+    tokio::spawn(async move {
+        // Take link delay into account
+        tokio::time::sleep_until(next_receive).await;
+
+        // Now transfer inbound to outbound
+        let mut link = link.lock();
+        let transmits = link.queue.receive(usize::MAX);
+        for transmit in transmits {
+            handle_transmit(transmit);
+        }
+    });
 }

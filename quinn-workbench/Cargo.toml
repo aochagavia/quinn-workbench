@@ -4,16 +4,17 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = { workspace = true }
-clap = { workspace = true }
-fastrand = { workspace = true }
+anyhow.workspace = true
+clap.workspace = true
+fastrand.workspace = true
 in-memory-network = { path = "../in-memory-network" }
-quinn = { workspace = true }
-quinn-proto = { workspace = true }
-rcgen = { workspace = true }
-rustls = { workspace = true }
+quinn.workspace = true
+quinn-proto.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
 tokio = { workspace = true, features = ["rt"] }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing.workspace = true
+tracing-subscriber.workspace = true
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
+serde_json.workspace = true
+serde_with.workspace = true
