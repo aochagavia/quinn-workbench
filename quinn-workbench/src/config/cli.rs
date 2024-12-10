@@ -33,7 +33,15 @@ pub struct CliOpt {
     #[arg(long)]
     pub find_hangs: bool,
 
-    /// Path to the JSON file containing the desired json config
+    /// Path to the JSON file containing the desired quinn config
     #[arg(long)]
-    pub config: PathBuf,
+    pub quinn_config: PathBuf,
+
+    /// Path to the JSON file containing the network graph
+    #[arg(long)]
+    pub network_graph: PathBuf,
+
+    /// Path to the JSON file containing the network events
+    #[arg(long)]
+    pub network_events: PathBuf,
 }

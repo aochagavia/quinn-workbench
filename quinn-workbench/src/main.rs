@@ -1,15 +1,15 @@
 mod config;
 mod quinn_extensions;
 
+use crate::config::SimulationConfig;
 use anyhow::{anyhow, Context};
 use clap::Parser;
 use config::cli::CliOpt;
-use config::json::{JsonConfig, QuinnJsonConfig};
+use config::quinn::QuinnJsonConfig;
 use fastrand::Rng;
-use in_memory_network::network::host::HostHandle;
+use in_memory_network::network::node::HostHandle;
 use in_memory_network::network::InMemoryNetwork;
 use in_memory_network::pcap_exporter::PcapExporter;
-use in_memory_network::NetworkConfig;
 use quinn::crypto::rustls::QuicClientConfig;
 use quinn::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use quinn::rustls::RootCertStore;
@@ -20,6 +20,7 @@ use quinn_extensions::no_cid::NoConnectionIdGenerator;
 use quinn_proto::congestion::NewRenoConfig;
 use quinn_proto::AckFrequencyConfig;
 use rustls::pki_types::PrivatePkcs8KeyDer;
+use serde::de::DeserializeOwned;
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
@@ -37,7 +38,7 @@ fn main() -> anyhow::Result<()> {
 
     std::env::set_var("SSLKEYLOGFILE", "keylog.key");
     let opt = CliOpt::parse();
-    let json_config = load_json_config(&opt.config)?;
+    let simulation_config = load_simulation_config(&opt)?;
 
     if opt.find_hangs {
         find_hangs(opt)
@@ -50,7 +51,7 @@ fn main() -> anyhow::Result<()> {
 
         let start = Instant::now();
         let pcap_exporter = Arc::new(PcapExporter::new());
-        let result = rt.block_on(run(&opt, json_config, pcap_exporter.clone()));
+        let result = rt.block_on(run(&opt, simulation_config, pcap_exporter.clone()));
 
         // Always save export, regardless of success / failure
         pcap_exporter.save("capture.pcap".as_ref());
@@ -63,9 +64,23 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-fn load_json_config(path: &Path) -> anyhow::Result<JsonConfig> {
-    let file = File::open(path).context("unable to open config JSON file for loading")?;
-    let parsed = serde_json::from_reader(file).context("error parsing JSON config")?;
+fn load_simulation_config(cli: &CliOpt) -> anyhow::Result<SimulationConfig> {
+    let quinn = load_json(&cli.quinn_config)?;
+    let network_graph = load_json(&cli.network_graph)?;
+    let network_events = load_json(&cli.network_events)?;
+
+    Ok(SimulationConfig {
+        quinn,
+        network_graph,
+        network_events,
+    })
+}
+
+fn load_json<T: DeserializeOwned>(path: &Path) -> anyhow::Result<T> {
+    let file =
+        File::open(path).with_context(|| format!("unable to open file at `{}`", path.display()))?;
+    let parsed = serde_json::from_reader(file)
+        .with_context(|| format!("error parsing JSON from `{}`", path.display()))?;
     Ok(parsed)
 }
 
@@ -76,7 +91,7 @@ fn find_hangs(opt: CliOpt) -> anyhow::Result<()> {
         let mut opt = opt.clone();
         opt.quinn_rng_seed = rng.u64(..);
         opt.simulated_network_rng_seed = rng.u64(..);
-        let json_config = load_json_config(&opt.config)?;
+        let simulation_config = load_simulation_config(&opt)?;
 
         println!("---\n---New run\n---");
         let pcap_exporter = Arc::new(PcapExporter::new());
@@ -89,7 +104,7 @@ fn find_hangs(opt: CliOpt) -> anyhow::Result<()> {
                 .build()
                 .expect("failed to initialize tokio");
 
-            rt.block_on(run(&opt, json_config, pcap_exporter))
+            rt.block_on(run(&opt, simulation_config, pcap_exporter))
         });
 
         std::thread::sleep(Duration::from_millis(200));
@@ -114,15 +129,9 @@ fn find_hangs(opt: CliOpt) -> anyhow::Result<()> {
 
 async fn run(
     options: &CliOpt,
-    config: JsonConfig,
+    config: SimulationConfig,
     pcap_exporter: Arc<PcapExporter>,
 ) -> anyhow::Result<()> {
-    let network_config = config.network;
-    let quinn_config = config.quinn.as_ref();
-
-    let simulated_link_delay = Duration::from_millis(network_config.delay_ms);
-    let extra_link_delay = Duration::from_millis(network_config.extra_delay_ms);
-
     println!("--- Params ---");
     let (quinn_rng_seed, simulated_network_rng_seed) = if options.non_deterministic {
         let mut rng = Rng::new();
@@ -132,70 +141,81 @@ async fn run(
     };
     println!("* Quinn seed: {}", quinn_rng_seed);
     println!("* Network seed: {}", simulated_network_rng_seed);
-    println!("* Transport config path: {}", options.config.display());
+    println!("* Quinn config path: {}", options.quinn_config.display());
+    println!("* Network graph path: {}", options.network_graph.display());
     println!(
-        "* Delay: {:.2}s ({:.2}s RTT)",
-        simulated_link_delay.as_secs_f64(),
-        simulated_link_delay.as_secs_f64() * 2.0
-    );
-    println!(
-        "* Extra delay ({:.2}% chance): {:.2}s",
-        network_config.extra_delay_ratio * 100.0,
-        extra_link_delay.as_secs_f64(),
-    );
-    println!(
-        "* Packet loss ratio: {:.2}%",
-        network_config.packet_loss_ratio * 100.0
-    );
-    println!(
-        "* Packet duplication ratio: {:.2}%",
-        network_config.packet_duplication_ratio * 100.0
-    );
-    println!(
-        "* ECN ratio: {:.2}%",
-        network_config.congestion_event_ratio * 100.0
+        "* Network events path: {}",
+        options.network_events.display()
     );
 
-    let mut quinn_rng = Rng::with_seed(quinn_rng_seed);
+    // let network_config = config.network;
+    // let simulated_link_delay = Duration::from_millis(network_config.delay_ms);
+    // let extra_link_delay = Duration::from_millis(network_config.extra_delay_ms);
+    // println!(
+    //     "* Delay: {:.2}s ({:.2}s RTT)",
+    //     simulated_link_delay.as_secs_f64(),
+    //     simulated_link_delay.as_secs_f64() * 2.0
+    // );
+    // println!(
+    //     "* Extra delay ({:.2}% chance): {:.2}s",
+    //     network_config.extra_delay_ratio * 100.0,
+    //     extra_link_delay.as_secs_f64(),
+    // );
+    // println!(
+    //     "* Packet loss ratio: {:.2}%",
+    //     network_config.packet_loss_ratio * 100.0
+    // );
+    // println!(
+    //     "* Packet duplication ratio: {:.2}%",
+    //     network_config.packet_duplication_ratio * 100.0
+    // );
+    // println!(
+    //     "* ECN ratio: {:.2}%",
+    //     network_config.congestion_event_ratio * 100.0
+    // );
+
     let start = Instant::now();
 
-    // Certificates
+    // Network
+    let network = Arc::new(InMemoryNetwork::initialize(
+        config.network_graph.into(),
+        config
+            .network_events
+            .into_iter()
+            .map(|e| e.into())
+            .collect(),
+        pcap_exporter.clone(),
+        Rng::with_seed(simulated_network_rng_seed),
+        start,
+    )?);
+
+    println!("--- Network ---");
+    println!("* Running connectivity check...");
+    network.assert_connectivity_between_hosts().await?;
+    println!("* Connectivity check passed!");
+
+    // Set up server certificate
     let server_name = "server-name";
     let cert = rcgen::generate_simple_self_signed(vec![server_name.into()]).unwrap();
     let key = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
     let cert = CertificateDer::from(cert.cert);
 
-    // Network
-    let network = Arc::new(InMemoryNetwork::initialize(
-        NetworkConfig {
-            congestion_event_ratio: network_config.congestion_event_ratio,
-            packet_loss_ratio: network_config.packet_loss_ratio,
-            packet_duplication_ratio: network_config.packet_duplication_ratio,
-            link_capacity: network_config.bandwidth,
-            link_delay: simulated_link_delay,
-            link_extra_delay: extra_link_delay,
-            link_extra_delay_ratio: network_config.extra_delay_ratio,
-        },
-        pcap_exporter.clone(),
-        Rng::with_seed(simulated_network_rng_seed),
-        start,
-    ));
-
     // Let a server listen in the background
+    let mut quinn_rng = Rng::with_seed(quinn_rng_seed);
     let server_host = network.host_a();
     let server_addr = server_host.addr();
     let server = server_endpoint(
         cert.clone(),
         key.into(),
         server_host,
-        quinn_config,
+        &config.quinn,
         &mut quinn_rng,
     )?;
     let server_task = tokio::spawn(server_listen(server, options.response_size));
 
     // Make repeated requests
     println!("--- Requests ---");
-    let client = client_endpoint(cert, network.host_b(), quinn_config, &mut quinn_rng)?;
+    let client = client_endpoint(cert, network.host_b(), &config.quinn, &mut quinn_rng)?;
     println!("0.00s CONNECT");
     let connection = client.connect(server_addr, server_name)?.await?;
 
@@ -229,12 +249,11 @@ async fn run(
     let total_time_sec = start.elapsed().as_secs_f64();
     println!("{:.2}s Connection closed", total_time_sec);
 
-    let rtt_sec = simulated_link_delay.as_secs_f64() * 2.0;
+    // let rtt_sec = simulated_link_delay.as_secs_f64() * 2.0;
     println!("--- Stats ---");
     println!(
-        "* Time from start to connection closed: {:.2}s ({:.2} RTT)",
+        "* Time from start to connection closed: {:.2}s",
         total_time_sec,
-        total_time_sec / rtt_sec,
     );
 
     let stats = network.stats();
@@ -294,7 +313,7 @@ fn server_endpoint(
     cert: CertificateDer<'static>,
     key: PrivateKeyDer<'static>,
     server_host: HostHandle,
-    quinn_config: Option<&QuinnJsonConfig>,
+    quinn_config: &QuinnJsonConfig,
     quinn_rng: &mut Rng,
 ) -> anyhow::Result<Endpoint> {
     let mut seed = [0; 32];
@@ -314,7 +333,7 @@ fn server_endpoint(
 fn client_endpoint(
     server_cert: CertificateDer<'_>,
     client_host: HostHandle,
-    quinn_config: Option<&QuinnJsonConfig>,
+    quinn_config: &QuinnJsonConfig,
     quinn_rng: &mut Rng,
 ) -> anyhow::Result<Endpoint> {
     let mut seed = [0; 32];
@@ -342,7 +361,7 @@ fn endpoint_config(rng_seed: [u8; 32]) -> EndpointConfig {
 
 fn client_config(
     server_cert: CertificateDer<'_>,
-    quinn_config: Option<&QuinnJsonConfig>,
+    quinn_config: &QuinnJsonConfig,
 ) -> anyhow::Result<ClientConfig> {
     let mut roots = RootCertStore::empty();
     roots.add(server_cert)?;
@@ -367,53 +386,47 @@ fn client_config(
     Ok(client_config)
 }
 
-fn transport_config(quinn_config: Option<&QuinnJsonConfig>) -> TransportConfig {
+fn transport_config(quinn_config: &QuinnJsonConfig) -> TransportConfig {
     let mut config = TransportConfig::default();
 
-    if let Some(quinn_config) = quinn_config {
-        if !quinn_config.mtu_discovery {
-            config.mtu_discovery_config(None);
-        }
-
-        config.max_idle_timeout(Some(
-            Duration::from_millis(quinn_config.maximum_idle_timeout_ms)
-                .try_into()
-                .unwrap(),
-        ));
-
-        if quinn_config.maximize_send_and_receive_windows {
-            config.receive_window(VarInt::MAX);
-            config.stream_receive_window(VarInt::MAX);
-            config.send_window(u64::MAX);
-        }
-
-        config.packet_threshold(quinn_config.packet_threshold);
-
-        if let Some(congestion_window) = quinn_config.fixed_congestion_window {
-            assert!(!quinn_config.use_ecn_based_reno);
-
-            config.congestion_controller_factory(Arc::new(NoCCConfig {
-                initial_window: congestion_window,
-            }));
-        } else {
-            config.congestion_controller_factory(Arc::new(EcnCcFactory::new(
-                NewRenoConfig::default(),
-            )));
-        }
-
-        let mut ack_frequency_config = AckFrequencyConfig::default();
-        ack_frequency_config
-            .ack_eliciting_threshold(VarInt::from_u32(quinn_config.ack_eliciting_threshold));
-        ack_frequency_config
-            .max_ack_delay(Some(Duration::from_millis(quinn_config.max_ack_delay_ms)));
-
-        // The docs say the recommended value for this is `packet_threshold - 1`
-        ack_frequency_config
-            .reordering_threshold(VarInt::from_u32(quinn_config.packet_threshold - 1));
-        config.ack_frequency_config(Some(ack_frequency_config));
-
-        config.initial_rtt(Duration::from_millis(quinn_config.initial_rtt_ms));
+    if !quinn_config.mtu_discovery {
+        config.mtu_discovery_config(None);
     }
+
+    config.max_idle_timeout(Some(
+        Duration::from_millis(quinn_config.maximum_idle_timeout_ms)
+            .try_into()
+            .unwrap(),
+    ));
+
+    if quinn_config.maximize_send_and_receive_windows {
+        config.receive_window(VarInt::MAX);
+        config.stream_receive_window(VarInt::MAX);
+        config.send_window(u64::MAX);
+    }
+
+    config.packet_threshold(quinn_config.packet_threshold);
+
+    if let Some(congestion_window) = quinn_config.fixed_congestion_window {
+        assert!(!quinn_config.use_ecn_based_reno);
+
+        config.congestion_controller_factory(Arc::new(NoCCConfig {
+            initial_window: congestion_window,
+        }));
+    } else {
+        config.congestion_controller_factory(Arc::new(EcnCcFactory::new(NewRenoConfig::default())));
+    }
+
+    let mut ack_frequency_config = AckFrequencyConfig::default();
+    ack_frequency_config
+        .ack_eliciting_threshold(VarInt::from_u32(quinn_config.ack_eliciting_threshold));
+    ack_frequency_config.max_ack_delay(Some(Duration::from_millis(quinn_config.max_ack_delay_ms)));
+
+    // The docs say the recommended value for this is `packet_threshold - 1`
+    ack_frequency_config.reordering_threshold(VarInt::from_u32(quinn_config.packet_threshold - 1));
+    config.ack_frequency_config(Some(ack_frequency_config));
+
+    config.initial_rtt(Duration::from_millis(quinn_config.initial_rtt_ms));
 
     config
 }

@@ -1,15 +1,18 @@
+#![allow(clippy::type_complexity)]
+
 pub mod network;
 pub mod pcap_exporter;
+pub mod quinn_interop;
 mod stats_tracker;
 
 use quinn::udp::EcnCodepoint;
 use std::fmt::Debug;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
 
-const HOST_A_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(88, 88, 88, 88)), 8080);
-const HOST_B_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 8080);
+const HOST_PORT: u16 = 8080;
 
 pub struct NetworkConfig {
     pub congestion_event_ratio: f64,
@@ -40,14 +43,18 @@ pub struct InTransitData {
     transmit: OwnedTransmit,
     last_sent: Instant,
     number: u64,
-    path: Vec<(Instant, network::NodeName)>,
+    path: Vec<(Instant, Arc<str>)>,
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::network::host::HostHandle;
-    use crate::network::{InMemoryNetwork, Node, NodeName};
+    use crate::network::node::HostHandle;
+    use crate::network::route::{IpRange, Route};
+    use crate::network::spec::{
+        NetworkInterface, NetworkLinkSpec, NetworkNodeSpec, NetworkSpec, NodeKind,
+    };
+    use crate::network::InMemoryNetwork;
     use crate::pcap_exporter::PcapExporter;
     use fastrand::Rng;
     use quinn::crypto::rustls::QuicClientConfig;
@@ -58,25 +65,171 @@ mod test {
     use std::future::Future;
     use std::io;
     use std::io::IoSliceMut;
+    use std::net::{IpAddr, Ipv4Addr};
     use std::pin::Pin;
     use std::sync::Arc;
     use std::task::{Context, Poll};
 
+    const SERVER_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(88, 88, 88, 88));
+    const ROUTER1_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(200, 200, 200, 1));
+    const ROUTER2_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(200, 200, 200, 2));
+    const CLIENT_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1));
+
     fn default_network() -> Arc<InMemoryNetwork> {
-        Arc::new(InMemoryNetwork::initialize(
-            NetworkConfig {
-                congestion_event_ratio: 0.0,
-                packet_loss_ratio: 0.0,
-                packet_duplication_ratio: 0.0,
-                link_capacity: 1024 * 1024 * 10,
-                link_delay: Duration::from_millis(10),
-                link_extra_delay: Default::default(),
-                link_extra_delay_ratio: 0.0,
-            },
-            Arc::new(PcapExporter::new()),
-            Rng::with_seed(42),
-            Instant::now(),
-        ))
+        let default_link_capacity = 1024 * 1024 * 10;
+        let default_link_delay = Duration::from_millis(10);
+        let client_cidr = IpRange {
+            start: CLIENT_ADDR,
+            end_inclusive: CLIENT_ADDR,
+        };
+        let server_cidr = IpRange {
+            start: SERVER_ADDR,
+            end_inclusive: SERVER_ADDR,
+        };
+
+        Arc::new(
+            InMemoryNetwork::initialize(
+                NetworkSpec {
+                    nodes: vec![
+                        NetworkNodeSpec {
+                            id: "server".to_string(),
+                            kind: NodeKind::Host,
+                            interfaces: vec![NetworkInterface {
+                                addresses: vec![SERVER_ADDR],
+                            }],
+                            routes: vec![Route {
+                                destination: client_cidr.clone(),
+                                next: ROUTER1_ADDR,
+                            }],
+                        },
+                        NetworkNodeSpec {
+                            id: "client".to_string(),
+                            kind: NodeKind::Host,
+                            interfaces: vec![NetworkInterface {
+                                addresses: vec![CLIENT_ADDR],
+                            }],
+                            routes: vec![Route {
+                                destination: server_cidr.clone(),
+                                next: ROUTER2_ADDR,
+                            }],
+                        },
+                        NetworkNodeSpec {
+                            id: "router1".to_string(),
+                            kind: NodeKind::Router,
+                            interfaces: vec![NetworkInterface {
+                                addresses: vec![ROUTER1_ADDR],
+                            }],
+                            routes: vec![
+                                Route {
+                                    destination: client_cidr.clone(),
+                                    next: ROUTER2_ADDR,
+                                },
+                                Route {
+                                    destination: server_cidr.clone(),
+                                    next: SERVER_ADDR,
+                                },
+                            ],
+                        },
+                        NetworkNodeSpec {
+                            id: "router2".to_string(),
+                            kind: NodeKind::Router,
+                            interfaces: vec![NetworkInterface {
+                                addresses: vec![ROUTER2_ADDR],
+                            }],
+                            routes: vec![
+                                Route {
+                                    destination: client_cidr.clone(),
+                                    next: CLIENT_ADDR,
+                                },
+                                Route {
+                                    destination: server_cidr.clone(),
+                                    next: ROUTER1_ADDR,
+                                },
+                            ],
+                        },
+                    ],
+                    links: vec![
+                        NetworkLinkSpec {
+                            id: "server-router1".to_string(),
+                            source: SERVER_ADDR,
+                            target: ROUTER1_ADDR,
+                            delay: default_link_delay,
+                            capacity_bytes: default_link_capacity,
+                            congestion_event_ratio: 0.0,
+                            packet_loss_ratio: 0.0,
+                            packet_duplication_ratio: 0.0,
+                            extra_delay: Default::default(),
+                            extra_delay_ratio: 0.0,
+                        },
+                        NetworkLinkSpec {
+                            id: "router1-router2".to_string(),
+                            source: ROUTER1_ADDR,
+                            target: ROUTER2_ADDR,
+                            delay: default_link_delay,
+                            capacity_bytes: default_link_capacity,
+                            congestion_event_ratio: 0.0,
+                            packet_loss_ratio: 0.0,
+                            packet_duplication_ratio: 0.0,
+                            extra_delay: Default::default(),
+                            extra_delay_ratio: 0.0,
+                        },
+                        NetworkLinkSpec {
+                            id: "router2-client".to_string(),
+                            source: ROUTER2_ADDR,
+                            target: CLIENT_ADDR,
+                            delay: default_link_delay,
+                            capacity_bytes: default_link_capacity,
+                            congestion_event_ratio: 0.0,
+                            packet_loss_ratio: 0.0,
+                            packet_duplication_ratio: 0.0,
+                            extra_delay: Default::default(),
+                            extra_delay_ratio: 0.0,
+                        },
+                        NetworkLinkSpec {
+                            id: "router1-server".to_string(),
+                            source: ROUTER1_ADDR,
+                            target: SERVER_ADDR,
+                            delay: default_link_delay,
+                            capacity_bytes: default_link_capacity,
+                            congestion_event_ratio: 0.0,
+                            packet_loss_ratio: 0.0,
+                            packet_duplication_ratio: 0.0,
+                            extra_delay: Default::default(),
+                            extra_delay_ratio: 0.0,
+                        },
+                        NetworkLinkSpec {
+                            id: "router2-router1".to_string(),
+                            source: ROUTER2_ADDR,
+                            target: ROUTER1_ADDR,
+                            delay: default_link_delay,
+                            capacity_bytes: default_link_capacity,
+                            congestion_event_ratio: 0.0,
+                            packet_loss_ratio: 0.0,
+                            packet_duplication_ratio: 0.0,
+                            extra_delay: Default::default(),
+                            extra_delay_ratio: 0.0,
+                        },
+                        NetworkLinkSpec {
+                            id: "client-router2".to_string(),
+                            source: CLIENT_ADDR,
+                            target: ROUTER2_ADDR,
+                            delay: default_link_delay,
+                            capacity_bytes: default_link_capacity,
+                            congestion_event_ratio: 0.0,
+                            packet_loss_ratio: 0.0,
+                            packet_duplication_ratio: 0.0,
+                            extra_delay: Default::default(),
+                            extra_delay_ratio: 0.0,
+                        },
+                    ],
+                },
+                Vec::new(),
+                Arc::new(PcapExporter::new()),
+                Rng::with_seed(42),
+                Instant::now(),
+            )
+            .unwrap(),
+        )
     }
 
     fn default_server_config() -> (&'static str, CertificateDer<'static>, ServerConfig) {
@@ -168,6 +321,8 @@ mod test {
     #[tokio::test(start_paused = true)]
     async fn test_packet_arrives_at_expected_time() {
         let network = default_network();
+        network.assert_connectivity_between_hosts().await.unwrap();
+
         let mut packet_arrived_rx = network.subscribe_to_packet_arrived();
 
         let start = Instant::now();
@@ -181,7 +336,7 @@ mod test {
                 segment_size: None,
             },
         );
-        network.send(start, Node::Host(network.host_b.clone()), data);
+        network.send(start, &network.host_b, data);
 
         let mut recv_result = BufsAndMeta::new();
         let received = {
@@ -200,22 +355,10 @@ mod test {
 
         // This test proves that the packet travels a specific path and is delayed at each hop
         let expected_timings = [
-            (
-                Duration::from_millis(0),
-                NodeName::Host("Client".to_string()),
-            ),
-            (
-                Duration::from_millis(10),
-                NodeName::Router("router2".to_string()),
-            ),
-            (
-                Duration::from_millis(20),
-                NodeName::Router("router1".to_string()),
-            ),
-            (
-                Duration::from_millis(30),
-                NodeName::Host("Server".to_string()),
-            ),
+            (Duration::from_millis(0), "client"),
+            (Duration::from_millis(10), "router2"),
+            (Duration::from_millis(20), "router1"),
+            (Duration::from_millis(30), "server"),
         ];
 
         assert_eq!(packet_arrived.path.len(), expected_timings.len());
@@ -223,7 +366,7 @@ mod test {
             packet_arrived.path.into_iter().zip(expected_timings)
         {
             let duration = instant - start;
-            assert_eq!(node, expected_node);
+            assert_eq!(&*node, expected_node);
             assert_eq!(duration, expected_duration, "{node:?}");
         }
     }

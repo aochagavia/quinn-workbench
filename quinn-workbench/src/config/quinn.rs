@@ -1,14 +1,6 @@
 use serde::Deserialize;
 
 #[derive(Deserialize)]
-pub struct JsonConfig {
-    /// Optionally, the configuration for the Quinn endpoints
-    pub quinn: Option<QuinnJsonConfig>,
-    /// The configuration of the simulated network
-    pub network: NetworkJsonConfig,
-}
-
-#[derive(Deserialize)]
 pub struct QuinnJsonConfig {
     /// The initial RTT of the QUIC connection, in milliseconds (used before an RTT sample is
     /// available).
@@ -49,25 +41,4 @@ pub struct QuinnJsonConfig {
     /// If true, configures congestion control to use a variant of `NewReno` that ignores packet
     /// loss and only takes ECN into consideration.
     pub use_ecn_based_reno: bool,
-}
-
-#[derive(Clone, Deserialize)]
-pub struct NetworkJsonConfig {
-    /// The one-way delay of the network, in milliseconds
-    pub delay_ms: u64,
-    /// The one-way extra delay of the network, which will be applied at random according to
-    /// `extra_delay_ratio`
-    pub extra_delay_ms: u64,
-    /// The ratio of packets that will have an extra delay applied, to simulate packet reordering
-    /// (the value must be between 0 and 1)
-    pub extra_delay_ratio: f64,
-    /// The ratio of packets that will be duplicated upon being sent (the value must be between 0
-    /// and 1)
-    pub packet_duplication_ratio: f64,
-    /// The ratio of packets that will be lost (the value must be between 0 and 1)
-    pub packet_loss_ratio: f64,
-    /// The ratio of packets that will be marked with a CE ECN codepoint (the value must be between 0 and 1)
-    pub congestion_event_ratio: f64,
-    /// The one-way bandwidth of the network, in bytes
-    pub bandwidth: u64,
 }

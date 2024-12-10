@@ -1,5 +1,4 @@
-use crate::network::host::HostHandle;
-use crate::network::{Node, NodeName};
+use crate::network::node::HostHandle;
 use crate::OwnedTransmit;
 use quinn::udp::{RecvMeta, Transmit};
 use quinn::{AsyncUdpSocket, UdpPoller};
@@ -40,7 +39,7 @@ impl AsyncUdpSocket for HostHandle {
                 segment_size: transmit.segment_size,
             },
         );
-        self.network.send(now, Node::Host(self.host.clone()), data);
+        self.network.send(now, &self.host, data);
 
         Ok(())
     }
@@ -63,10 +62,7 @@ impl AsyncUdpSocket for HostHandle {
             let transmit = in_transit.transmit;
 
             let mut path = in_transit.path;
-            path.push((
-                Instant::now(),
-                NodeName::Host(self.network.host(self.addr()).name.to_string()),
-            ));
+            path.push((Instant::now(), self.network.host(self.addr()).id.clone()));
             self.network
                 .notify_packet_arrived(path, transmit.contents.clone());
 
