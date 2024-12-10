@@ -1,0 +1,197 @@
+{
+  "type": "NetworkGraph",
+  "nodes": [
+    {
+      "id": "GND",
+      "interfaces": [
+        {
+          "addresses": [
+            {
+              "address": "192.168.40.1"
+            }
+          ]
+        }
+      ],
+      "routes": [
+        {
+          "destination": "192.168.43.0/24",
+          "next": "192.168.40.2",
+          "cost": 100
+        }
+      ]
+    },
+    {
+      "type": "router",
+      "id": "DSN",
+      "interfaces": [
+        {
+          "addresses": [
+            {
+              "address": "192.168.40.2"
+            }
+          ]
+        },
+        {
+          "addresses": [
+            {
+              "address": "192.168.41.1"
+            }
+          ]
+        }
+      ],
+      "routes": [
+        {
+          "destination": "192.168.43.0/24",
+          "next": "192.168.41.2",
+          "cost": 100
+        },
+        {
+          "destination": "192.168.40.0/24",
+          "next": "192.168.40.1",
+          "cost": 100
+        }
+      ]
+    },
+    {
+      "type": "router",
+      "id": "MRO",
+      "interfaces": [
+        {
+          "addresses": [
+            {
+              "address": "192.168.41.2"
+            }
+          ]
+        },
+        {
+          "addresses": [
+            {
+              "address": "192.168.42.1"
+            }
+          ]
+        }
+      ],
+      "routes": [
+        {
+          "destination": "192.168.43.0/24",
+          "next": "192.168.42.2",
+          "cost": 100
+        },
+        {
+          "destination": "192.168.40.0/24",
+          "next": "192.168.41.1",
+          "cost": 100
+        }
+      ]
+    },
+    {
+      "type": "router",
+      "id": "M20",
+      "interfaces": [
+        {
+          "addresses": [
+            {
+              "address": "192.168.42.2"
+            }
+          ]
+        },
+        {
+          "addresses": [
+            {
+              "address": "192.168.43.1"
+            }
+          ]
+        }
+      ],
+      "routes": [
+        {
+          "destination": "192.168.40.0/24",
+          "next": "192.168.42.1",
+          "cost": 100
+        },
+        {
+          "destination": "192.168.43.0/24",
+          "next": "192.168.43.2",
+          "cost": 100
+        }
+      ]
+    },
+    {
+      "id": "ING",
+      "interfaces": [
+        {
+          "addresses": [
+            {
+              "address": "192.168.43.2"
+            }
+          ]
+        }
+      ],
+      "routes": [
+        {
+          "destination": "192.168.40.0/24",
+          "next": "192.168.43.1",
+          "cost": 100
+        }
+      ]
+    }
+  ],
+  "links": [
+    {
+      "id": "GND-DSN",
+      "source": "192.168.40.1",
+      "target": "192.168.40.2",
+      "delay_ms": 10,
+      "capacity_bytes": 1000000000
+    },
+    {
+      "id": "DSN-GND",
+      "source": "192.168.40.2",
+      "target": "192.168.40.1",
+      "delay_ms": 10,
+      "capacity_bytes": 1000000000
+    },
+    {
+      "id": "DSN-MRO",
+      "source": "192.168.41.1",
+      "target": "192.168.41.2",
+      "delay_ms": 900000,
+      "capacity_bytes": 1000000
+    },
+    {
+      "id": "MRO-DSN",
+      "source": "192.168.41.2",
+      "target": "192.168.41.1",
+      "delay_ms": 900000,
+      "capacity_bytes": 1000000
+    },
+    {
+      "id": "MRO-M20",
+      "source": "192.168.42.1",
+      "target": "192.168.42.2",
+      "delay_ms": 1000,
+      "capacity_bytes": 10000000
+    },
+    {
+      "id": "M20-MRO",
+      "source": "192.168.42.2",
+      "target": "192.168.42.1",
+      "delay_ms": 1000,
+      "capacity_bytes": 1000000
+    },
+    {
+      "id": "M20-ING",
+      "source": "192.168.43.1",
+      "target": "192.168.43.2",
+      "delay_ms": 10,
+      "capacity_bytes": 100000000
+    },
+    {
+      "id": "ING-M20",
+      "source": "192.168.43.2",
+      "target": "192.168.43.1",
+      "delay_ms": 10,
+      "capacity_bytes": 100000000
+    }
+  ]
+}

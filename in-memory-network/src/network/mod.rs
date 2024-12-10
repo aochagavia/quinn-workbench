@@ -212,7 +212,7 @@ impl InMemoryNetwork {
         &self.hosts_by_addr[&addr]
     }
 
-    pub async fn assert_connectivity_between_hosts(self: &Arc<Self>) -> anyhow::Result<()> {
+    pub async fn assert_connectivity_between_hosts(self: &Arc<Self>) -> anyhow::Result<(Instant, Instant)> {
         let now = Instant::now();
 
         let peers = [
@@ -241,15 +241,17 @@ impl InMemoryNetwork {
         tokio::time::sleep(Duration::from_secs(3600 * 24 * days)).await;
 
         // Ensure the packets arrived at each host
-        let a_to_b_failed = self.host_b.inbound.lock().receive(1).is_empty();
-        let b_to_a_failed = self.host_a.inbound.lock().receive(1).is_empty();
+        let a_to_b = self.host_b.inbound.lock().receive(1);
+        let a_to_b_failed = a_to_b.is_empty();
+        let b_to_a = self.host_a.inbound.lock().receive(1);
+        let b_to_a_failed = b_to_a.is_empty();
 
         if a_to_b_failed || b_to_a_failed {
             let report = |failed| if failed { "failed" } else { "succeeded" };
             bail!("failed to deliver packets between the hosts after {days} days (A to B {}, B to A {})", report(a_to_b_failed), report(b_to_a_failed));
         }
 
-        Ok(())
+        Ok((a_to_b[0].path.last().unwrap().0, b_to_a[0].path.last().unwrap().0))
     }
 
     fn node_to_host(&self, node: &impl Node) -> Option<&Host> {
@@ -314,7 +316,7 @@ impl InMemoryNetwork {
         mut data: InTransitData,
     ) {
         data.last_sent = now;
-        let mut dropped = false;
+        let mut randomly_dropped = false;
         let mut duplicate = false;
         let congestion_experienced;
         let mut extra_delay = Duration::from_secs(0);
@@ -337,7 +339,7 @@ impl InMemoryNetwork {
             let link = link.lock();
             let roll1 = self.rng.lock().f64();
             if roll1 < link.packet_loss_ratio {
-                dropped = true;
+                randomly_dropped = true;
             } else if roll1 < link.packet_loss_ratio + link.packet_duplication_ratio {
                 duplicate = true;
             }
@@ -362,8 +364,8 @@ impl InMemoryNetwork {
         }
 
         // A packet could also be dropped if the target doesn't have enough capacity
-        let dropped = dropped || !link.lock().queue.has_enough_capacity(&data, duplicate);
-        if dropped {
+        let dropped_by_link = !link.lock().queue.has_enough_capacity(&data, duplicate);
+        if randomly_dropped || dropped_by_link {
             // Only track lost packets for hosts, not for routers
             if let Some(source) = self.node_to_host(previous_node) {
                 let source_name = &source.id;
@@ -385,6 +387,12 @@ impl InMemoryNetwork {
                     "{:.2}s WARN {source_name} packet lost (#{})!",
                     self.start.elapsed().as_secs_f64(),
                     self.pcap_exporter.total_tracked_packets(),
+                );
+            } else if dropped_by_link {
+                println!(
+                    "{:.2}s WARN packet dropped by link because not enough capacity ({})!",
+                    self.start.elapsed().as_secs_f64(),
+                    link.lock().id,
                 );
             }
         } else {
@@ -432,7 +440,6 @@ impl InMemoryNetwork {
                 }
 
                 link.lock().queue.send(packet, metadata_index, extra_delay);
-            }
         }
 
         // Schedule the packet to be forwarded at the `next_receive` instant
@@ -458,6 +465,7 @@ impl InMemoryNetwork {
                 host_queue.lock().send(transmit, None, Duration::default())
             });
         };
+        }
     }
 
     pub(crate) fn notify_packet_arrived(&self, path: Vec<(Instant, Arc<str>)>, content: Vec<u8>) {

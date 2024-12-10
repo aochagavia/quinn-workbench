@@ -261,7 +261,7 @@ mod test {
         ClientConfig::new(Arc::new(QuicClientConfig::try_from(crypto).unwrap()))
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn test_quic_handshake_and_bidi_stream_works() {
         let rt = quinn::default_runtime().unwrap();
 

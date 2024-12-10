@@ -1,5 +1,5 @@
 {
-  "initial_rtt_ms": 30000,
+  "initial_rtt_ms": 3600000,
   "maximum_idle_timeout_ms": 100000000000,
   "packet_threshold": 4294967295,
   "mtu_discovery": false,
