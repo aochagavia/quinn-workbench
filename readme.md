@@ -26,7 +26,7 @@ After [installing Rust](https://rustup.rs/), you can get started with:
 ```bash
 cargo run --release -- \
   --quinn-config test-data/earth-mars/quinn.json \
-  --network-graph test-data/earth-mars/networkgraph-fullmars.json \
+  --network-graph test-data/earth-mars/networkgraph-5nodes.json \
   --network-events test-data/earth-mars/events.json
 ```
 
@@ -35,7 +35,7 @@ Here's an example issuing a single request and receiving a 10 MiB response:
 ```bash
 cargo run --release -- \
   --quinn-config test-data/earth-mars/quinn.json \
-  --network-graph test-data/earth-mars/networkgraph-fullmars.json \
+  --network-graph test-data/earth-mars/networkgraph-5nodes.json \
   --network-events test-data/earth-mars/events.json \
   --repeat 1 --response-size 10485760
 ```
@@ -45,7 +45,7 @@ Here's an example controlling the random seeds (which otherwise use a hardcoded 
 ```bash
 cargo run --release -- \
   --quinn-config test-data/earth-mars/quinn.json \
-  --network-graph test-data/earth-mars/networkgraph-fullmars.json \
+  --network-graph test-data/earth-mars/networkgraph-5nodes.json \
   --network-events test-data/earth-mars/events.json \
   --quinn-rng-seed 1234 --simulated-network-rng-seed 1337
 ```
@@ -55,7 +55,7 @@ Here's an example using random seeds derived from a source of entropy:
 ```bash
 cargo run --release -- \
   --quinn-config test-data/earth-mars/quinn.json \
-  --network-graph test-data/earth-mars/networkgraph-fullmars.json \
+  --network-graph test-data/earth-mars/networkgraph-5nodes.json \
   --network-events test-data/earth-mars/events.json \
   --non-deterministic
 ```

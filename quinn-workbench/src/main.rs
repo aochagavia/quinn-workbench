@@ -148,32 +148,6 @@ async fn run(
         options.network_events.display()
     );
 
-    // let network_config = config.network;
-    // let simulated_link_delay = Duration::from_millis(network_config.delay_ms);
-    // let extra_link_delay = Duration::from_millis(network_config.extra_delay_ms);
-    // println!(
-    //     "* Delay: {:.2}s ({:.2}s RTT)",
-    //     simulated_link_delay.as_secs_f64(),
-    //     simulated_link_delay.as_secs_f64() * 2.0
-    // );
-    // println!(
-    //     "* Extra delay ({:.2}% chance): {:.2}s",
-    //     network_config.extra_delay_ratio * 100.0,
-    //     extra_link_delay.as_secs_f64(),
-    // );
-    // println!(
-    //     "* Packet loss ratio: {:.2}%",
-    //     network_config.packet_loss_ratio * 100.0
-    // );
-    // println!(
-    //     "* Packet duplication ratio: {:.2}%",
-    //     network_config.packet_duplication_ratio * 100.0
-    // );
-    // println!(
-    //     "* ECN ratio: {:.2}%",
-    //     network_config.congestion_event_ratio * 100.0
-    // );
-
     let start = Instant::now();
 
     // Network
@@ -191,8 +165,8 @@ async fn run(
 
     println!("--- Network ---");
     println!("* Running connectivity check...");
-    network.assert_connectivity_between_hosts().await?;
-    println!("* Connectivity check passed!");
+    let (arrived1, arrived2) = network.assert_connectivity_between_hosts().await?;
+    println!("* Connectivity check passed (packets arrived after {} ms and {} ms)", (arrived1 - start).as_millis(), (arrived2 - start).as_millis());
 
     // Set up server certificate
     let server_name = "server-name";
@@ -216,8 +190,11 @@ async fn run(
     // Make repeated requests
     println!("--- Requests ---");
     let client = client_endpoint(cert, network.host_b(), &config.quinn, &mut quinn_rng)?;
-    println!("0.00s CONNECT");
-    let connection = client.connect(server_addr, server_name)?.await?;
+    println!("{:.2}s CONNECT", start.elapsed().as_secs_f64());
+    let connection = client.connect(server_addr, server_name)
+        .context("failed to start connecting to server")?
+        .await
+        .context("client failed to connect to server")?;
 
     let request_number = options.repeat;
     let request = "GET /index.html";
