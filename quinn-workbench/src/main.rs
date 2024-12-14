@@ -166,7 +166,11 @@ async fn run(
     println!("--- Network ---");
     println!("* Running connectivity check...");
     let (arrived1, arrived2) = network.assert_connectivity_between_hosts().await?;
-    println!("* Connectivity check passed (packets arrived after {} ms and {} ms)", (arrived1 - start).as_millis(), (arrived2 - start).as_millis());
+    println!(
+        "* Connectivity check passed (packets arrived after {} ms and {} ms)",
+        (arrived1 - start).as_millis(),
+        (arrived2 - start).as_millis()
+    );
 
     // Set up server certificate
     let server_name = "server-name";
@@ -191,7 +195,8 @@ async fn run(
     println!("--- Requests ---");
     let client = client_endpoint(cert, network.host_b(), &config.quinn, &mut quinn_rng)?;
     println!("{:.2}s CONNECT", start.elapsed().as_secs_f64());
-    let connection = client.connect(server_addr, server_name)
+    let connection = client
+        .connect(server_addr, server_name)
         .context("failed to start connecting to server")?
         .await
         .context("client failed to connect to server")?;

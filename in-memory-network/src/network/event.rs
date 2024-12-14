@@ -9,7 +9,7 @@ pub struct NetworkEvent {
 pub struct NetworkEventPayload {
     pub id: String,
     pub status: Option<LinkStatus>,
-    pub capacity_bytes: Option<u64>,
+    pub bandwidth_bps: Option<u64>,
     pub delay: Option<Duration>,
     pub extra_delay: Option<Duration>,
     pub extra_delay_ratio: Option<f64>,

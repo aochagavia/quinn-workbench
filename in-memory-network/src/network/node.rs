@@ -65,7 +65,8 @@ impl Host {
             inbound: Arc::new(Mutex::new(InboundQueue::new(
                 // Hosts have zero delay (delay is handled at the link level)
                 Duration::default(),
-                // Hosts have an infinite buffer (buffer size limits are handled at the link level)
+                // Hosts have an infinite inbound bandwidth (bandwidth limits are handled at the
+                // link level)
                 u64::MAX,
                 stats_tracker.clone(),
                 start,

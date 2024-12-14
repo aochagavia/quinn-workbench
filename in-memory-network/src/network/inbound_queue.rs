@@ -6,11 +6,61 @@ use std::task::Waker;
 use std::time::Duration;
 use tokio::time::Instant;
 
+/// Keeps track of the available bandwidth for sending data
+struct DataRateCalculator {
+    last_increase: Instant,
+    bandwidth_bps: f64,
+    available_bandwidth_bits: usize,
+    maximum_available_bandwidth_bits: usize,
+}
+
+impl DataRateCalculator {
+    fn new(bandwidth_bps: u64) -> Self {
+        // We use 2 seconds as the maximum period in which you can "accumulate" bandwidth. It is not
+        // the most realistic (it should probably be shorter, like 100ms), but it enables us to
+        // treat packets as the single unit of transportation (instead of implementing logic to
+        // partially transmit packets, which sounds complex).
+        let maximum_available_bandwidth_bits = bandwidth_bps.saturating_mul(2) as usize;
+
+        Self {
+            last_increase: Instant::now(),
+            bandwidth_bps: bandwidth_bps as f64,
+            available_bandwidth_bits: maximum_available_bandwidth_bits,
+            maximum_available_bandwidth_bits,
+        }
+    }
+
+    fn has_bandwidth_available(&mut self, now: Instant, payload_size_bytes: usize) -> bool {
+        if payload_size_bytes.saturating_mul(8) > self.maximum_available_bandwidth_bits {
+            println!("WARN: packet will never be sent because its size exceeds the maximum available bandwidth");
+        }
+
+        let seconds_since_last_increase = (now - self.last_increase).as_secs_f64();
+        let available_bits_since_last_increase = (self.bandwidth_bps * seconds_since_last_increase)
+            .round()
+            .clamp(0.0, usize::MAX as f64)
+            as usize;
+
+        // Cap the available bandwidth (otherwise it will build up in periods of inactivity and
+        // tend to infinity)
+        self.available_bandwidth_bits = self
+            .available_bandwidth_bits
+            .saturating_add(available_bits_since_last_increase)
+            .clamp(0, self.maximum_available_bandwidth_bits);
+
+        payload_size_bytes.saturating_mul(8) < self.available_bandwidth_bits
+    }
+
+    fn track_send(&mut self, payload_size_bytes: usize) {
+        assert!(self.has_bandwidth_available(Instant::now(), payload_size_bytes));
+        self.available_bandwidth_bits -= payload_size_bytes.saturating_mul(8);
+    }
+}
+
 pub struct InboundQueue {
     queue: BinaryHeap<PrioritizedInTransitData>,
-    bytes_in_transit: usize,
     link_delay: Duration,
-    link_capacity: usize,
+    rate_calculator: DataRateCalculator,
     highest_received_transmit_number: AtomicU64,
     stats_tracker: NetworkStatsTracker,
     start: Instant,
@@ -20,15 +70,14 @@ pub struct InboundQueue {
 impl InboundQueue {
     pub(crate) fn new(
         link_delay: Duration,
-        link_capacity: u64,
+        link_bandwidth_bps: u64,
         stats_tracker: NetworkStatsTracker,
         start: Instant,
     ) -> Self {
         Self {
             queue: BinaryHeap::new(),
-            bytes_in_transit: 0,
             link_delay,
-            link_capacity: link_capacity as usize,
+            rate_calculator: DataRateCalculator::new(link_bandwidth_bps),
             highest_received_transmit_number: Default::default(),
             stats_tracker,
             start,
@@ -36,10 +85,15 @@ impl InboundQueue {
         }
     }
 
-    pub(crate) fn has_enough_capacity(&self, data: &InTransitData, duplicate: bool) -> bool {
+    pub(crate) fn has_bandwidth_available(
+        &mut self,
+        data: &InTransitData,
+        duplicate: bool,
+    ) -> bool {
         let duplicate_multiplier = if duplicate { 2 } else { 1 };
-        self.bytes_in_transit + data.transmit.contents.len() * duplicate_multiplier
-            <= self.link_capacity
+        let total_size = data.transmit.contents.len() * duplicate_multiplier;
+        self.rate_calculator
+            .has_bandwidth_available(Instant::now(), total_size)
     }
 
     pub(crate) fn send(
@@ -48,8 +102,8 @@ impl InboundQueue {
         metadata_index: Option<usize>,
         extra_delay: Duration,
     ) {
-        assert!(self.has_enough_capacity(&data, false));
-        self.bytes_in_transit += data.transmit.contents.len();
+        self.rate_calculator
+            .track_send(data.transmit.contents.len());
         self.queue.push(PrioritizedInTransitData {
             data,
             metadata_index,
@@ -104,10 +158,6 @@ impl InboundQueue {
                 }
 
                 highest_received = highest_received.max(data.data.number);
-
-                // Keep track of bytes in transit
-                self.bytes_in_transit -= data.data.transmit.contents.len();
-
                 received.push(data.data);
             } else {
                 break;
