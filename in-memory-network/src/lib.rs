@@ -9,20 +9,9 @@ use quinn::udp::EcnCodepoint;
 use std::fmt::Debug;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::time::Instant;
 
 const HOST_PORT: u16 = 8080;
-
-pub struct NetworkConfig {
-    pub congestion_event_ratio: f64,
-    pub packet_loss_ratio: f64,
-    pub packet_duplication_ratio: f64,
-    pub link_capacity: u64,
-    pub link_delay: Duration,
-    pub link_extra_delay: Duration,
-    pub link_extra_delay_ratio: f64,
-}
 
 #[derive(Clone, Debug)]
 struct OwnedTransmit {
@@ -69,6 +58,7 @@ mod test {
     use std::pin::Pin;
     use std::sync::Arc;
     use std::task::{Context, Poll};
+    use std::time::Duration;
 
     const SERVER_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(88, 88, 88, 88));
     const ROUTER1_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(200, 200, 200, 1));
@@ -76,7 +66,7 @@ mod test {
     const CLIENT_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1));
 
     fn default_network() -> Arc<InMemoryNetwork> {
-        let default_link_capacity = 1024 * 1024 * 10;
+        let default_link_bandwidth_bps = 1024 * 1024 * 10 * 8;
         let default_link_delay = Duration::from_millis(10);
         let client_cidr = IpRange {
             start: CLIENT_ADDR,
@@ -154,7 +144,7 @@ mod test {
                             source: SERVER_ADDR,
                             target: ROUTER1_ADDR,
                             delay: default_link_delay,
-                            capacity_bytes: default_link_capacity,
+                            bandwidth_bps: default_link_bandwidth_bps,
                             congestion_event_ratio: 0.0,
                             packet_loss_ratio: 0.0,
                             packet_duplication_ratio: 0.0,
@@ -166,7 +156,7 @@ mod test {
                             source: ROUTER1_ADDR,
                             target: ROUTER2_ADDR,
                             delay: default_link_delay,
-                            capacity_bytes: default_link_capacity,
+                            bandwidth_bps: default_link_bandwidth_bps,
                             congestion_event_ratio: 0.0,
                             packet_loss_ratio: 0.0,
                             packet_duplication_ratio: 0.0,
@@ -178,7 +168,7 @@ mod test {
                             source: ROUTER2_ADDR,
                             target: CLIENT_ADDR,
                             delay: default_link_delay,
-                            capacity_bytes: default_link_capacity,
+                            bandwidth_bps: default_link_bandwidth_bps,
                             congestion_event_ratio: 0.0,
                             packet_loss_ratio: 0.0,
                             packet_duplication_ratio: 0.0,
@@ -190,7 +180,7 @@ mod test {
                             source: ROUTER1_ADDR,
                             target: SERVER_ADDR,
                             delay: default_link_delay,
-                            capacity_bytes: default_link_capacity,
+                            bandwidth_bps: default_link_bandwidth_bps,
                             congestion_event_ratio: 0.0,
                             packet_loss_ratio: 0.0,
                             packet_duplication_ratio: 0.0,
@@ -202,7 +192,7 @@ mod test {
                             source: ROUTER2_ADDR,
                             target: ROUTER1_ADDR,
                             delay: default_link_delay,
-                            capacity_bytes: default_link_capacity,
+                            bandwidth_bps: default_link_bandwidth_bps,
                             congestion_event_ratio: 0.0,
                             packet_loss_ratio: 0.0,
                             packet_duplication_ratio: 0.0,
@@ -214,7 +204,7 @@ mod test {
                             source: CLIENT_ADDR,
                             target: ROUTER2_ADDR,
                             delay: default_link_delay,
-                            capacity_bytes: default_link_capacity,
+                            bandwidth_bps: default_link_bandwidth_bps,
                             congestion_event_ratio: 0.0,
                             packet_loss_ratio: 0.0,
                             packet_duplication_ratio: 0.0,

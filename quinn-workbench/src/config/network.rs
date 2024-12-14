@@ -61,8 +61,8 @@ struct NetworkLinkJson {
     source: IpAddr,
     #[serde_as(as = "DisplayFromStr")]
     target: IpAddr,
-    /// The link's capacity, in bytes
-    capacity_bytes: u64,
+    /// The link's bandwidth, in bytes per second
+    bandwidth_bps: u64,
     /// The delay of the link, in milliseconds
     delay_ms: u64,
     /// The extra delay of the link, which will be applied at random according to
@@ -136,7 +136,7 @@ impl From<NetworkLinkJson> for in_memory_network::network::spec::NetworkLinkSpec
             source: l.source,
             target: l.target,
             delay: Duration::from_millis(l.delay_ms),
-            capacity_bytes: l.capacity_bytes,
+            bandwidth_bps: l.bandwidth_bps,
             congestion_event_ratio: l.congestion_event_ratio,
             packet_loss_ratio: l.packet_loss_ratio,
             packet_duplication_ratio: l.packet_duplication_ratio,
@@ -156,7 +156,7 @@ pub struct NetworkEventJson {
 struct NetworkEventPayloadJson {
     id: String,
     status: Option<NetworkLinkStatusJson>,
-    capacity_bytes: Option<u64>,
+    bandwidth_bps: Option<u64>,
     delay_ms: Option<u64>,
     extra_delay_ms: Option<u64>,
     extra_delay_ratio: Option<f64>,
@@ -175,7 +175,7 @@ impl From<NetworkEventJson> for NetworkEvent {
                     NetworkLinkStatusJson::Up => LinkStatus::Up,
                     NetworkLinkStatusJson::Down => LinkStatus::Down,
                 }),
-                capacity_bytes: json.link.capacity_bytes,
+                bandwidth_bps: json.link.bandwidth_bps,
                 delay: json.link.delay_ms.map(Duration::from_millis),
                 extra_delay: json.link.extra_delay_ms.map(Duration::from_millis),
                 extra_delay_ratio: json.link.extra_delay_ratio,

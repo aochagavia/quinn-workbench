@@ -117,7 +117,7 @@ impl InMemoryNetwork {
                 id: l.id,
                 status: LinkStatus::Up,
                 target,
-                queue: InboundQueue::new(l.delay, l.capacity_bytes, stats_tracker.clone(), start),
+                queue: InboundQueue::new(l.delay, l.bandwidth_bps, stats_tracker.clone(), start),
                 congestion_event_ratio: l.congestion_event_ratio,
                 packet_loss_ratio: l.packet_loss_ratio,
                 packet_duplication_ratio: l.packet_duplication_ratio,
@@ -212,7 +212,9 @@ impl InMemoryNetwork {
         &self.hosts_by_addr[&addr]
     }
 
-    pub async fn assert_connectivity_between_hosts(self: &Arc<Self>) -> anyhow::Result<(Instant, Instant)> {
+    pub async fn assert_connectivity_between_hosts(
+        self: &Arc<Self>,
+    ) -> anyhow::Result<(Instant, Instant)> {
         let now = Instant::now();
 
         let peers = [
@@ -251,7 +253,10 @@ impl InMemoryNetwork {
             bail!("failed to deliver packets between the hosts after {days} days (A to B {}, B to A {})", report(a_to_b_failed), report(b_to_a_failed));
         }
 
-        Ok((a_to_b[0].path.last().unwrap().0, b_to_a[0].path.last().unwrap().0))
+        Ok((
+            a_to_b[0].path.last().unwrap().0,
+            b_to_a[0].path.last().unwrap().0,
+        ))
     }
 
     fn node_to_host(&self, node: &impl Node) -> Option<&Host> {
@@ -363,8 +368,8 @@ impl InMemoryNetwork {
             data.transmit.ecn = Some(EcnCodepoint::from_bits(0b11).unwrap())
         }
 
-        // A packet could also be dropped if the target doesn't have enough capacity
-        let dropped_by_link = !link.lock().queue.has_enough_capacity(&data, duplicate);
+        // A packet could also be dropped if the link doesn't have available bandwidth
+        let dropped_by_link = !link.lock().queue.has_bandwidth_available(&data, duplicate);
         if randomly_dropped || dropped_by_link {
             // Only track lost packets for hosts, not for routers
             if let Some(source) = self.node_to_host(previous_node) {
@@ -390,7 +395,7 @@ impl InMemoryNetwork {
                 );
             } else if dropped_by_link {
                 println!(
-                    "{:.2}s WARN packet dropped by link because not enough capacity ({})!",
+                    "{:.2}s WARN packet dropped by link because not enough bandwidth ({})!",
                     self.start.elapsed().as_secs_f64(),
                     link.lock().id,
                 );
@@ -440,31 +445,31 @@ impl InMemoryNetwork {
                 }
 
                 link.lock().queue.send(packet, metadata_index, extra_delay);
-        }
+            }
 
-        // Schedule the packet to be forwarded at the `next_receive` instant
-        let next_receive = link.lock().queue.time_of_next_receive().unwrap();
-        if let Some(router) = self.routers_by_addr.get(&link.lock().target) {
-            // The packet should be forwarded to the next router, after which it needs to be sent to
-            // the next hop (hence the `network.send`)
-            let network = self.clone();
-            let router = router.clone();
-            schedule_forward_packet(link.clone(), next_receive, move |mut transmit| {
-                // Update the packet's path
-                transmit.path.push((Instant::now(), router.id.clone()));
+            // Schedule the packet to be forwarded at the `next_receive` instant
+            let next_receive = link.lock().queue.time_of_next_receive().unwrap();
+            if let Some(router) = self.routers_by_addr.get(&link.lock().target) {
+                // The packet should be forwarded to the next router, after which it needs to be sent to
+                // the next hop (hence the `network.send`)
+                let network = self.clone();
+                let router = router.clone();
+                schedule_forward_packet(link.clone(), next_receive, move |mut transmit| {
+                    // Update the packet's path
+                    transmit.path.push((Instant::now(), router.id.clone()));
 
-                // Send to next hop
-                network.send(Instant::now(), &*router, transmit);
-            });
-        } else {
-            // The packet should be forwarded to the final host's inbound queue (from where it will
-            // be automatically picked up by quinn)
-            let host = self.hosts_by_addr.get(&transmit_destination_addr).unwrap();
-            let host_queue = host.inbound.clone();
-            schedule_forward_packet(link.clone(), next_receive, move |transmit| {
-                host_queue.lock().send(transmit, None, Duration::default())
-            });
-        };
+                    // Send to next hop
+                    network.send(Instant::now(), &*router, transmit);
+                });
+            } else {
+                // The packet should be forwarded to the final host's inbound queue (from where it will
+                // be automatically picked up by quinn)
+                let host = self.hosts_by_addr.get(&transmit_destination_addr).unwrap();
+                let host_queue = host.inbound.clone();
+                schedule_forward_packet(link.clone(), next_receive, move |transmit| {
+                    host_queue.lock().send(transmit, None, Duration::default())
+                });
+            };
         }
     }
 

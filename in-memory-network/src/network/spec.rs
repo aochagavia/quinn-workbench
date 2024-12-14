@@ -29,7 +29,7 @@ pub struct NetworkLinkSpec {
     pub source: IpAddr,
     pub target: IpAddr,
     pub delay: Duration,
-    pub capacity_bytes: u64,
+    pub bandwidth_bps: u64,
     pub congestion_event_ratio: f64,
     pub packet_loss_ratio: f64,
     pub packet_duplication_ratio: f64,
