@@ -151,7 +151,7 @@ async fn run(
     let start = Instant::now();
 
     // Network
-    let network = Arc::new(InMemoryNetwork::initialize(
+    let network = InMemoryNetwork::initialize(
         config.network_graph.into(),
         config
             .network_events
@@ -161,7 +161,7 @@ async fn run(
         pcap_exporter.clone(),
         Rng::with_seed(simulated_network_rng_seed),
         start,
-    )?);
+    )?;
 
     println!("--- Network ---");
     println!("* Running connectivity check...");

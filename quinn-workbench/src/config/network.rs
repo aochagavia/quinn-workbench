@@ -1,5 +1,4 @@
-use in_memory_network::network::event::{NetworkEvent, NetworkEventPayload};
-use in_memory_network::network::link::LinkStatus;
+use in_memory_network::network::event::{NetworkEvent, NetworkEventPayload, UpdateLinkStatus};
 use in_memory_network::network::route::IpRange;
 use serde::Deserialize;
 use serde_with::{serde_as, DisplayFromStr};
@@ -132,7 +131,7 @@ impl From<NetworkSpecJson> for in_memory_network::network::spec::NetworkSpec {
 impl From<NetworkLinkJson> for in_memory_network::network::spec::NetworkLinkSpec {
     fn from(l: NetworkLinkJson) -> Self {
         in_memory_network::network::spec::NetworkLinkSpec {
-            id: l.id,
+            id: l.id.into_boxed_str().into(),
             source: l.source,
             target: l.target,
             delay: Duration::from_millis(l.delay_ms),
@@ -172,8 +171,8 @@ impl From<NetworkEventJson> for NetworkEvent {
             payload: NetworkEventPayload {
                 id: json.link.id,
                 status: json.link.status.map(|s| match s {
-                    NetworkLinkStatusJson::Up => LinkStatus::Up,
-                    NetworkLinkStatusJson::Down => LinkStatus::Down,
+                    NetworkLinkStatusJson::Up => UpdateLinkStatus::Up,
+                    NetworkLinkStatusJson::Down => UpdateLinkStatus::Down,
                 }),
                 bandwidth_bps: json.link.bandwidth_bps,
                 delay: json.link.delay_ms.map(Duration::from_millis),

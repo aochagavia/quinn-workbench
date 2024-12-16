@@ -1,4 +1,5 @@
 use crate::network::inbound_queue::InboundQueue;
+use crate::network::outbound_buffer::OutboundBuffer;
 use crate::network::spec::{NetworkNodeSpec, NodeKind};
 use crate::network::InMemoryNetwork;
 use crate::stats_tracker::NetworkStatsTracker;
@@ -6,14 +7,29 @@ use crate::HOST_PORT;
 use anyhow::bail;
 use parking_lot::Mutex;
 use std::fmt::{Debug, Formatter};
-use std::iter;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::time::Instant;
 
-pub trait Node {
-    fn addresses(&self) -> impl Iterator<Item = IpAddr>;
+pub enum Node {
+    Host(Host),
+    Router(Arc<Router>),
+}
+
+impl Node {
+    pub fn addresses(&self) -> impl Iterator<Item = IpAddr> {
+        match self {
+            Node::Host(host) => vec![host.addr.ip()].into_iter(),
+            Node::Router(router) => router.addresses.clone().into_iter(),
+        }
+    }
+
+    pub fn outbound_buffer(&self) -> Arc<OutboundBuffer> {
+        match self {
+            Node::Host(host) => host.outbound.clone(),
+            Node::Router(router) => router.outbound_buffer.clone(),
+        }
+    }
 }
 
 pub struct HostHandle {
@@ -38,6 +54,7 @@ pub struct Host {
     pub(crate) addr: SocketAddr,
     pub(crate) id: Arc<str>,
     pub(crate) inbound: Arc<Mutex<InboundQueue>>,
+    outbound: Arc<OutboundBuffer>,
 }
 
 impl Host {
@@ -62,32 +79,16 @@ impl Host {
         Ok(Self {
             addr: SocketAddr::new(node_address, HOST_PORT),
             id: Arc::from(node.id.into_boxed_str()),
-            inbound: Arc::new(Mutex::new(InboundQueue::new(
-                // Hosts have zero delay (delay is handled at the link level)
-                Duration::default(),
-                // Hosts have an infinite inbound bandwidth (bandwidth limits are handled at the
-                // link level)
-                u64::MAX,
-                stats_tracker.clone(),
-                start,
-            ))),
-        })
-    }
-}
+            inbound: Arc::new(Mutex::new(InboundQueue::new(stats_tracker.clone(), start))),
 
-impl Node for Host {
-    fn addresses(&self) -> impl Iterator<Item = IpAddr> {
-        iter::once(self.addr.ip())
+            // Hosts have no outbound queue, which is equivalent to a zero-capacity queue
+            outbound: Arc::new(OutboundBuffer::new(0)),
+        })
     }
 }
 
 pub struct Router {
     pub(crate) addresses: Vec<IpAddr>,
     pub(crate) id: Arc<str>,
-}
-
-impl Node for Router {
-    fn addresses(&self) -> impl Iterator<Item = IpAddr> {
-        self.addresses.iter().cloned()
-    }
+    pub(crate) outbound_buffer: Arc<OutboundBuffer>,
 }

@@ -1,4 +1,4 @@
-use crate::network::node::HostHandle;
+use crate::network::node::{HostHandle, Node};
 use crate::OwnedTransmit;
 use quinn::udp::{RecvMeta, Transmit};
 use quinn::{AsyncUdpSocket, UdpPoller};
@@ -39,7 +39,7 @@ impl AsyncUdpSocket for HostHandle {
                 segment_size: transmit.segment_size,
             },
         );
-        self.network.send(now, &self.host, data);
+        self.network.send(now, Node::Host(self.host.clone()), data);
 
         Ok(())
     }
