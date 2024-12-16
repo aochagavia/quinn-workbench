@@ -60,7 +60,7 @@ cargo run --release -- \
   --non-deterministic
 ```
 
-### JSON config details
+### JSON QUINN and Network Characteristics config details
 
 Consider the following config:
 
@@ -151,8 +151,24 @@ flags control other aspects of the simulation:
     The random seed used for the simulated network (governing packet loss, duplication and reordering)
 
     [default: 42]
+    
+--network-graph <NETWORK_GRAPH_JSON_FILE>
+    Creates a network based on the topology described in the JSON file
+    
+--network-events <NETWORK_EVENTS_JSON_FILE>
+    Apply various timed events, such as link up and down, to the network 
 
 ```
+
+### JSON Network Topology Config Details
+See examples in [test-data/earth-mars](test-data/earth-mars/networkgraph-fullmars.json)
+
+Note that links are uni-directional, so two entries are necessary to describe a bidirectional link.
+
+### JSON Network Events Config Details
+See examples in [test-data/earth-mars](test-data/earth-mars/events.json)
+
+Note that the link id in an event refers to the link id in the topology graph file.
 
 ### Acknowledgements
 
