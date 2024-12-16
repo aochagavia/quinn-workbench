@@ -6,13 +6,13 @@ pub mod event;
 pub(crate) mod inbound_queue;
 pub mod link;
 pub mod node;
+mod outbound_buffer;
 pub mod route;
 pub mod spec;
 
-use crate::network::event::NetworkEvent;
-use crate::network::inbound_queue::InboundQueue;
-use crate::network::link::LinkStatus;
+use crate::network::event::{NetworkEvent, NetworkEventPayload, UpdateLinkStatus};
 use crate::network::node::{Host, HostHandle, Node};
+use crate::network::outbound_buffer::OutboundBuffer;
 use crate::network::spec::{NetworkSpec, NodeKind};
 use crate::pcap_exporter::PcapExporter;
 use crate::stats_tracker::{EndpointStats, NetworkStats, NetworkStatsTracker};
@@ -48,7 +48,9 @@ pub struct InMemoryNetwork {
     /// Map from ip addresses to the available route information
     routes_by_addr: Arc<HashMap<IpAddr, Arc<Vec<Route>>>>,
     /// Map from ip address pairs to the corresponding links
-    links: Arc<HashMap<(IpAddr, IpAddr), Arc<Mutex<NetworkLink>>>>,
+    links_by_addr: Arc<HashMap<(IpAddr, IpAddr), Arc<Mutex<NetworkLink>>>>,
+    /// Map from ids the corresponding links
+    links_by_id: Arc<HashMap<Arc<str>, Arc<Mutex<NetworkLink>>>>,
     pcap_exporter: Arc<PcapExporter>,
     stats_tracker: NetworkStatsTracker,
     rng: Mutex<Rng>,
@@ -62,11 +64,11 @@ impl InMemoryNetwork {
     /// Initializes a new [`InMemoryNetwork`] based on the provided spec
     pub fn initialize(
         network_spec: NetworkSpec,
-        _events: Vec<NetworkEvent>,
+        mut events: Vec<NetworkEvent>,
         pcap_exporter: Arc<PcapExporter>,
         rng: Rng,
         start: Instant,
-    ) -> anyhow::Result<Self> {
+    ) -> anyhow::Result<Arc<Self>> {
         let mut routes_by_addr = HashMap::new();
         let routes = network_spec
             .nodes
@@ -109,30 +111,31 @@ impl InMemoryNetwork {
             );
         }
 
-        let mut links = HashMap::new();
+        let mut links_by_addr = HashMap::new();
+        let mut links_by_id = HashMap::new();
         for l in network_spec.links {
+            let id = l.id.clone();
             let source = l.source;
             let target = l.target;
-            let l = Arc::new(Mutex::new(NetworkLink {
-                id: l.id,
-                status: LinkStatus::Up,
-                target,
-                queue: InboundQueue::new(l.delay, l.bandwidth_bps, stats_tracker.clone(), start),
-                congestion_event_ratio: l.congestion_event_ratio,
-                packet_loss_ratio: l.packet_loss_ratio,
-                packet_duplication_ratio: l.packet_duplication_ratio,
-                extra_delay: l.extra_delay,
-                extra_delay_ratio: l.extra_delay_ratio,
-            }));
-            let conflicting_link = links.insert((source, target), l.clone());
+            let l = Arc::new(Mutex::new(NetworkLink::new(
+                start,
+                l,
+                stats_tracker.clone(),
+            )));
+            let conflicting_link = links_by_addr.insert((source, target), l.clone());
             if let Some(conflicting_link) = conflicting_link {
                 bail!(
                     "links {} and {} share the same address pair: {} -> {}",
-                    l.lock().id,
+                    id,
                     conflicting_link.lock().id,
                     source,
                     target
                 );
+            }
+
+            let conflicting_link = links_by_id.insert(id.clone(), l);
+            if conflicting_link.is_some() {
+                bail!("there is more than one link with id {}", id,);
             }
         }
 
@@ -144,15 +147,18 @@ impl InMemoryNetwork {
             }
 
             let mut inbound_links = HashMap::new();
-            for (&(source, target), link) in &links {
+            for (&(source, target), link) in &links_by_addr {
                 if addresses.contains(&target) {
                     inbound_links.insert(source, link.clone());
                 }
             }
 
+            // TODO: get this from config instead of hardcoding it
+            let buffer_size_bytes = 1024 * 1024 * 100;
             let router = Arc::new(Router {
                 id: Arc::from(r.id.into_boxed_str()),
                 addresses: addresses.clone(),
+                outbound_buffer: Arc::new(OutboundBuffer::new(buffer_size_bytes)),
             });
 
             for address in addresses {
@@ -170,13 +176,14 @@ impl InMemoryNetwork {
 
         let (tx, rx) = tokio::sync::broadcast::channel(10);
 
-        Ok(Self {
+        let network = Arc::new(Self {
             host_a,
             host_b,
             hosts_by_addr,
             routers_by_addr: Arc::new(routers_by_addr),
             routes_by_addr: Arc::new(routes_by_addr),
-            links: Arc::new(links),
+            links_by_addr: Arc::new(links_by_addr),
+            links_by_id: Arc::new(links_by_id),
             pcap_exporter,
             stats_tracker,
             rng: Mutex::new(rng),
@@ -184,7 +191,71 @@ impl InMemoryNetwork {
             next_transmit_number: Default::default(),
             packet_arrived_tx: tx,
             packet_arrived_rx: rx,
-        })
+        });
+
+        // Process events in the background
+        let network_clone = network.clone();
+        events.sort_by_key(|e| e.relative_time);
+        tokio::spawn(async move {
+            for event in events.into_iter() {
+                // Wait until next event should run
+                tokio::time::sleep_until(start + event.relative_time).await;
+
+                let NetworkEventPayload {
+                    id,
+                    status,
+                    bandwidth_bps,
+                    delay,
+                    extra_delay,
+                    extra_delay_ratio,
+                    packet_duplication_ratio,
+                    packet_loss_ratio,
+                    congestion_event_ratio,
+                } = event.payload;
+
+                if bandwidth_bps.is_some() {
+                    println!("WARN: changing the bandwidth in events is currently unsupported");
+                }
+
+                if delay.is_some() {
+                    println!("WARN: changing the delay in events is currently unsupported");
+                }
+
+                if extra_delay.is_some() {
+                    println!("WARN: changing the extra delay in events is currently unsupported");
+                }
+
+                if extra_delay_ratio.is_some() {
+                    println!(
+                        "WARN: changing the extra delay ratio in events is currently unsupported"
+                    );
+                }
+
+                if packet_duplication_ratio.is_some() {
+                    println!("WARN: changing the packet duplication ratio in events is currently unsupported");
+                }
+
+                if packet_loss_ratio.is_some() {
+                    println!(
+                        "WARN: changing the packet loss ratio in events is currently unsupported"
+                    );
+                }
+
+                if congestion_event_ratio.is_some() {
+                    println!("WARN: changing the congestion event ratio in events is currently unsupported");
+                }
+
+                let Some(link) = network_clone.links_by_id.get(id.as_str()) else {
+                    println!("WARN: skipping received event for link that doesn't exist ({id})");
+                    continue;
+                };
+
+                link.lock()
+                    .update_status(status.unwrap_or(UpdateLinkStatus::Up));
+            }
+        });
+
+        Ok(network)
     }
 
     pub fn subscribe_to_packet_arrived(&self) -> tokio::sync::broadcast::Receiver<PacketArrived> {
@@ -235,7 +306,7 @@ impl InMemoryNetwork {
                 },
             );
 
-            self.send(now, source, data);
+            self.send(now, Node::Host(source.clone()), data);
         }
 
         // Wait for 90 days for the packets to arrive
@@ -259,7 +330,7 @@ impl InMemoryNetwork {
         ))
     }
 
-    fn node_to_host(&self, node: &impl Node) -> Option<&Host> {
+    fn node_to_host(&self, node: &Node) -> Option<&Host> {
         let mut addresses = node.addresses();
         match (addresses.next(), addresses.next()) {
             (Some(addr), None) => self
@@ -276,7 +347,7 @@ impl InMemoryNetwork {
     /// Uses the node's routing table to identify the next hop's link
     fn resolve_link(
         &self,
-        node: &impl Node,
+        node: &Node,
         destination: SocketAddr,
     ) -> Option<Arc<Mutex<NetworkLink>>> {
         for node_addr in node.addresses() {
@@ -289,7 +360,7 @@ impl InMemoryNetwork {
                 continue;
             };
 
-            if let Some(link) = self.links.get(&(node_addr, next_hop_addr)) {
+            if let Some(link) = self.links_by_addr.get(&(node_addr, next_hop_addr)) {
                 return Some(link.clone());
             }
         }
@@ -307,7 +378,6 @@ impl InMemoryNetwork {
         InTransitData {
             source_addr,
             transmit,
-            last_sent: now,
             number: self.next_transmit_number.fetch_add(1, Ordering::Relaxed),
             path: vec![(now, source_host.id.clone())],
         }
@@ -317,17 +387,16 @@ impl InMemoryNetwork {
     pub(crate) fn send(
         self: &Arc<InMemoryNetwork>,
         now: Instant,
-        previous_node: &impl Node,
+        current_node: Node,
         mut data: InTransitData,
     ) {
-        data.last_sent = now;
         let mut randomly_dropped = false;
         let mut duplicate = false;
         let congestion_experienced;
         let mut extra_delay = Duration::from_secs(0);
         let transmit_destination_addr = data.transmit.destination;
 
-        let Some(link) = self.resolve_link(previous_node, data.transmit.destination) else {
+        let Some(link) = self.resolve_link(&current_node, data.transmit.destination) else {
             let nodes: Vec<_> = data.path.into_iter().map(|(_, n)| n).collect();
             let mut path = nodes.join(" -> ");
             path.push_str(" -> ?");
@@ -357,22 +426,9 @@ impl InMemoryNetwork {
             congestion_experienced = self.rng.lock().f64() < link.congestion_event_ratio;
         }
 
-        if congestion_experienced {
-            // The Quinn-provided transmit must indicate support for ECN
-            assert!(data
-                .transmit
-                .ecn
-                .is_some_and(|codepoint| codepoint as u8 == 0b10 || codepoint as u8 == 0b01));
-
-            // Set explicit congestion event codepoint
-            data.transmit.ecn = Some(EcnCodepoint::from_bits(0b11).unwrap())
-        }
-
-        // A packet could also be dropped if the link doesn't have available bandwidth
-        let dropped_by_link = !link.lock().queue.has_bandwidth_available(&data, duplicate);
-        if randomly_dropped || dropped_by_link {
-            // Only track lost packets for hosts, not for routers
-            if let Some(source) = self.node_to_host(previous_node) {
+        if randomly_dropped {
+            // Only track randomly dropped packets for hosts, not for routers
+            if let Some(source) = self.node_to_host(&current_node) {
                 let source_name = &source.id;
                 self.pcap_exporter.track_packet(
                     now,
@@ -393,84 +449,113 @@ impl InMemoryNetwork {
                     self.start.elapsed().as_secs_f64(),
                     self.pcap_exporter.total_tracked_packets(),
                 );
-            } else if dropped_by_link {
-                println!(
-                    "{:.2}s WARN packet dropped by link because not enough bandwidth ({})!",
-                    self.start.elapsed().as_secs_f64(),
-                    link.lock().id,
-                );
             }
-        } else {
-            let total = if duplicate { 2 } else { 1 };
-            let packets = vec![data; total];
 
-            for (i, packet) in packets.into_iter().enumerate() {
-                let duplicate = i == 1;
-                let mut metadata_index = None;
+            return;
+        }
 
-                // Only track duplicate packets for hosts, not for routers
-                if let Some(source) = self.node_to_host(previous_node) {
-                    let source_name = &source.id;
-                    self.pcap_exporter.track_packet(
-                        now,
-                        &packet,
-                        &source.addr,
-                        packet.transmit.ecn,
-                        false,
+        if congestion_experienced {
+            // The Quinn-provided transmit must indicate support for ECN
+            assert!(data
+                .transmit
+                .ecn
+                .is_some_and(|codepoint| codepoint as u8 == 0b10 || codepoint as u8 == 0b01));
+
+            // Set explicit congestion event codepoint
+            data.transmit.ecn = Some(EcnCodepoint::from_bits(0b11).unwrap())
+        }
+
+        let total = if duplicate { 2 } else { 1 };
+        let packets = vec![data; total];
+
+        for (i, packet) in packets.into_iter().enumerate() {
+            let link_is_saturated = !link.lock().has_bandwidth_available(&packet);
+            if link_is_saturated {
+                // Try to enqueue the data on the node's outbound buffer for later sending
+                let outbound_buffer = current_node.outbound_buffer();
+                let data_len = packet.transmit.contents.len();
+
+                if outbound_buffer.reserve(data_len) {
+                    // The buffer has capacity!
+                    let sent = NetworkLink::send_when_bandwidth_available(
+                        link.clone(),
+                        packet,
+                        None,
                         extra_delay,
                     );
-                    metadata_index = Some(self.stats_tracker.track_sent(
-                        source.addr,
-                        packet.transmit.contents.len(),
-                        duplicate,
-                        self.pcap_exporter.total_tracked_packets(),
-                        congestion_experienced,
-                    ));
+                    let network = self.clone();
+                    let link = link.clone();
 
-                    if duplicate {
-                        println!(
-                            "{:.2}s WARN {source_name} sent duplicate packet (#{})!",
-                            self.start.elapsed().as_secs_f64(),
-                            self.pcap_exporter.total_tracked_packets(),
-                        );
-                    }
-
-                    if packet.transmit.ecn.is_some_and(|t| t == EcnCodepoint::Ce) {
-                        println!(
-                            "{:.2}s WARN {source_name} sent packet marked with CE ECN (#{})!",
-                            self.start.elapsed().as_secs_f64(),
-                            self.pcap_exporter.total_tracked_packets(),
-                        );
-                    }
+                    // When the packet is finally sent, we can release capacity from the outbound
+                    // buffer and forward the packet
+                    tokio::spawn(async move {
+                        match sent.await {
+                            Ok(_) => {
+                                outbound_buffer.release(data_len);
+                                schedule_forward_packet(network, link, transmit_destination_addr);
+                            },
+                            Err(_) => println!(
+                                "ERROR: channel closed while waiting for bandwidth to become available"
+                            ),
+                        }
+                    });
+                } else {
+                    // The buffer is full and the packet is being dropped
+                    let link = link.lock();
+                    println!(
+                        "{:.2}s WARN packet dropped by link because it was saturated and node buffer was full: {}!",
+                        self.start.elapsed().as_secs_f64(),
+                        link.id,
+                    );
                 }
 
-                link.lock().queue.send(packet, metadata_index, extra_delay);
+                // The link is saturated, so there's nothing else to do for this packet
+                continue;
             }
 
-            // Schedule the packet to be forwarded at the `next_receive` instant
-            let next_receive = link.lock().queue.time_of_next_receive().unwrap();
-            if let Some(router) = self.routers_by_addr.get(&link.lock().target) {
-                // The packet should be forwarded to the next router, after which it needs to be sent to
-                // the next hop (hence the `network.send`)
-                let network = self.clone();
-                let router = router.clone();
-                schedule_forward_packet(link.clone(), next_receive, move |mut transmit| {
-                    // Update the packet's path
-                    transmit.path.push((Instant::now(), router.id.clone()));
+            let duplicate = i == 1;
+            let mut metadata_index = None;
 
-                    // Send to next hop
-                    network.send(Instant::now(), &*router, transmit);
-                });
-            } else {
-                // The packet should be forwarded to the final host's inbound queue (from where it will
-                // be automatically picked up by quinn)
-                let host = self.hosts_by_addr.get(&transmit_destination_addr).unwrap();
-                let host_queue = host.inbound.clone();
-                schedule_forward_packet(link.clone(), next_receive, move |transmit| {
-                    host_queue.lock().send(transmit, None, Duration::default())
-                });
-            };
+            // Only track duplicate packets for hosts, not for routers
+            if let Some(source) = self.node_to_host(&current_node) {
+                let source_name = &source.id;
+                self.pcap_exporter.track_packet(
+                    now,
+                    &packet,
+                    &source.addr,
+                    packet.transmit.ecn,
+                    false,
+                    extra_delay,
+                );
+                metadata_index = Some(self.stats_tracker.track_sent(
+                    source.addr,
+                    packet.transmit.contents.len(),
+                    duplicate,
+                    self.pcap_exporter.total_tracked_packets(),
+                    congestion_experienced,
+                ));
+
+                if duplicate {
+                    println!(
+                        "{:.2}s WARN {source_name} sent duplicate packet (#{})!",
+                        self.start.elapsed().as_secs_f64(),
+                        self.pcap_exporter.total_tracked_packets(),
+                    );
+                }
+
+                if packet.transmit.ecn.is_some_and(|t| t == EcnCodepoint::Ce) {
+                    println!(
+                        "{:.2}s WARN {source_name} sent packet marked with CE ECN (#{})!",
+                        self.start.elapsed().as_secs_f64(),
+                        self.pcap_exporter.total_tracked_packets(),
+                    );
+                }
+            }
+
+            link.lock().send(packet, metadata_index, extra_delay);
         }
+
+        schedule_forward_packet(self.clone(), link.clone(), transmit_destination_addr);
     }
 
     pub(crate) fn notify_packet_arrived(&self, path: Vec<(Instant, Arc<str>)>, content: Vec<u8>) {
@@ -534,6 +619,43 @@ impl InMemoryNetwork {
 }
 
 fn schedule_forward_packet(
+    network: Arc<InMemoryNetwork>,
+    link: Arc<Mutex<NetworkLink>>,
+    transmit_destination_addr: SocketAddr,
+) {
+    let Some(next_receive) = link.lock().time_of_next_receive() else {
+        // There are no packets waiting to be received in the link (e.g. maybe they were
+        // dropped or are being buffered)
+        return;
+    };
+
+    if let Some(router) = network.routers_by_addr.get(&link.lock().target) {
+        // The packet should be forwarded to the next router, after which it needs to be sent to
+        // the next hop (hence the `network.send`)
+        let network = network.clone();
+        let router = router.clone();
+        schedule_forward_packet_inner(link.clone(), next_receive, move |mut transmit| {
+            // Update the packet's path
+            transmit.path.push((Instant::now(), router.id.clone()));
+
+            // Send to next hop
+            network.send(Instant::now(), Node::Router(router.clone()), transmit);
+        });
+    } else {
+        // The packet should be forwarded to the final host's inbound queue (from where it will
+        // be automatically picked up by quinn)
+        let host = network
+            .hosts_by_addr
+            .get(&transmit_destination_addr)
+            .unwrap();
+        let host_queue = host.inbound.clone();
+        schedule_forward_packet_inner(link.clone(), next_receive, move |transmit| {
+            host_queue.lock().send(transmit, None, Duration::default())
+        });
+    };
+}
+
+fn schedule_forward_packet_inner(
     link: Arc<Mutex<NetworkLink>>,
     next_receive: Instant,
     handle_transmit: impl Fn(InTransitData) + Send + 'static,
@@ -544,7 +666,7 @@ fn schedule_forward_packet(
 
         // Now transfer inbound to outbound
         let mut link = link.lock();
-        let transmits = link.queue.receive(usize::MAX);
+        let transmits = link.receive(usize::MAX);
         for transmit in transmits {
             handle_transmit(transmit);
         }

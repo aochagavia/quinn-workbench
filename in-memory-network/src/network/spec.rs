@@ -1,5 +1,6 @@
 use crate::network::route::Route;
 use std::net::IpAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub struct NetworkSpec {
@@ -25,7 +26,7 @@ pub struct NetworkInterface {
 }
 
 pub struct NetworkLinkSpec {
-    pub id: String,
+    pub id: Arc<str>,
     pub source: IpAddr,
     pub target: IpAddr,
     pub delay: Duration,

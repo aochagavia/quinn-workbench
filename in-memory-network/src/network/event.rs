@@ -1,4 +1,3 @@
-use crate::network::link::LinkStatus;
 use std::time::Duration;
 
 pub struct NetworkEvent {
@@ -8,7 +7,7 @@ pub struct NetworkEvent {
 
 pub struct NetworkEventPayload {
     pub id: String,
-    pub status: Option<LinkStatus>,
+    pub status: Option<UpdateLinkStatus>,
     pub bandwidth_bps: Option<u64>,
     pub delay: Option<Duration>,
     pub extra_delay: Option<Duration>,
@@ -16,4 +15,10 @@ pub struct NetworkEventPayload {
     pub packet_duplication_ratio: Option<f64>,
     pub packet_loss_ratio: Option<f64>,
     pub congestion_event_ratio: Option<f64>,
+}
+
+#[derive(Debug)]
+pub enum UpdateLinkStatus {
+    Up,
+    Down,
 }

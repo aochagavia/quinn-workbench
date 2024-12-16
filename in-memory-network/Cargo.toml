@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow.workspace = true
 fastrand.workspace = true
+futures-util = "0.3.31"
 parking_lot.workspace = true
 pcap-file.workspace = true
 pnet_packet.workspace = true
@@ -13,4 +14,5 @@ quinn.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+bon = "3.3.0"
 rcgen.workspace = true
