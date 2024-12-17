@@ -5,13 +5,13 @@ use serde_with::{serde_as, DisplayFromStr};
 use std::net::IpAddr;
 use std::time::Duration;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct NetworkSpecJson {
     nodes: Vec<NetworkNodeJson>,
     links: Vec<NetworkLinkJson>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct NetworkNodeJson {
     id: String,
     #[serde(rename = "type")]
@@ -25,27 +25,27 @@ fn default_network_node_kind() -> NetworkNodeKindJson {
     NetworkNodeKindJson::Host
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 enum NetworkNodeKindJson {
     Router,
     Host,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct NetworkInterfaceJson {
     addresses: Vec<NetworkAddressJson>,
 }
 
 #[serde_as]
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct NetworkAddressJson {
     #[serde_as(as = "DisplayFromStr")]
     address: IpAddr,
 }
 
 #[serde_as]
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct NetworkRouteJson {
     #[serde_as(as = "DisplayFromStr")]
     destination: IpRange,
@@ -53,7 +53,7 @@ struct NetworkRouteJson {
 }
 
 #[serde_as]
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct NetworkLinkJson {
     id: String,
     #[serde_as(as = "DisplayFromStr")]
@@ -84,7 +84,7 @@ struct NetworkLinkJson {
     congestion_event_ratio: f64,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 enum NetworkLinkStatusJson {
     Up,
@@ -145,13 +145,13 @@ impl From<NetworkLinkJson> for in_memory_network::network::spec::NetworkLinkSpec
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct NetworkEventJson {
     relative_time_ms: u64,
     link: NetworkEventPayloadJson,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct NetworkEventPayloadJson {
     id: String,
     status: Option<NetworkLinkStatusJson>,
