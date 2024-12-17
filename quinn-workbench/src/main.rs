@@ -150,15 +150,17 @@ async fn run(
 
     let start = Instant::now();
 
-    // Network
+    // Network check
+    let network_check_pcap_exporter = Arc::new(PcapExporter::new());
     let network = InMemoryNetwork::initialize(
-        config.network_graph.into(),
+        config.network_graph.clone().into(),
         config
             .network_events
+            .clone()
             .into_iter()
             .map(|e| e.into())
             .collect(),
-        pcap_exporter.clone(),
+        network_check_pcap_exporter,
         Rng::with_seed(simulated_network_rng_seed),
         start,
     )?;
@@ -171,6 +173,23 @@ async fn run(
         (arrived1 - start).as_millis(),
         (arrived2 - start).as_millis()
     );
+
+    drop(network);
+
+    let start = Instant::now();
+
+    // Network
+    let network = InMemoryNetwork::initialize(
+        config.network_graph.into(),
+        config
+            .network_events
+            .into_iter()
+            .map(|e| e.into())
+            .collect(),
+        pcap_exporter.clone(),
+        Rng::with_seed(simulated_network_rng_seed),
+        start,
+    )?;
 
     // Set up server certificate
     let server_name = "server-name";
