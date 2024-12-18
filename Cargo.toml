@@ -4,8 +4,10 @@ resolver = "2"
 
 [workspace.dependencies]
 anyhow = "1.0.86"
+bon = "3.3.0"
 clap = { version = "4", features = ["derive"] }
 fastrand = { version = "2.1.0" }
+futures-util = "0.3.31"
 parking_lot = "0.12.3"
 pcap-file = "2.0.0"
 pnet_packet = "0.34.0"
@@ -19,3 +21,4 @@ serde_with = "3.11.0"
 tokio = { version = "1.37.0", features = ["test-util", "macros"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+uuid = { version = "1.11.0", features = ["v4"] }

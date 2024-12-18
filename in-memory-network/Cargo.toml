@@ -6,14 +6,16 @@ edition = "2021"
 [dependencies]
 anyhow.workspace = true
 fastrand.workspace = true
-futures-util = "0.3.31"
+futures-util.workspace = true
 parking_lot.workspace = true
 pcap-file.workspace = true
 pnet_packet.workspace = true
 quinn.workspace = true
 tokio.workspace = true
-uuid = { version = "1.11.0", features = ["v4"] }
+uuid.workspace = true
+serde.workspace = true
+serde_with.workspace = true
 
 [dev-dependencies]
-bon = "3.3.0"
+bon.workspace = true
 rcgen.workspace = true

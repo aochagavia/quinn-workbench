@@ -3,7 +3,7 @@ use crate::network::node::Node;
 use crate::network::spec::{NetworkNodeSpec, NetworkSpec};
 use crate::pcap_exporter::PcapExporter;
 use crate::tracing::simulation_step::{
-    PacketAffectedByRandomEvent, PacketDropped, PacketInNode, PacketInTransit, SimulationStep,
+    GenericPacketEvent, PacketDropped, PacketHasExtraDelay, PacketInTransit, SimulationStep,
     SimulationStepKind,
 };
 use crate::tracing::simulation_stepper::SimulationStepper;
@@ -31,6 +31,10 @@ impl SimulationStepTracer {
         }
     }
 
+    pub fn steps(&self) -> Vec<SimulationStep> {
+        self.recorded_steps.lock().clone()
+    }
+
     pub fn stats(&self) -> NetworkStats {
         NetworkStats {
             by_node: self.stepper().simulate(),
@@ -50,7 +54,7 @@ impl SimulationStepTracer {
     }
 
     pub fn track_packet_in_node(&self, node: &Node, packet: &InTransitData) {
-        self.record(SimulationStepKind::PacketInNode(PacketInNode {
+        self.record(SimulationStepKind::PacketInNode(GenericPacketEvent {
             packet_id: packet.id,
             packet_number: packet.number,
             packet_size_bytes: packet.transmit.contents.len(),
@@ -70,7 +74,7 @@ impl SimulationStepTracer {
         self.record(SimulationStepKind::PacketDropped(PacketDropped {
             packet_id: data.id,
             node_id: current_node.id().clone(),
-            random: true,
+            injected: true,
         }));
 
         println!(
@@ -90,7 +94,7 @@ impl SimulationStepTracer {
         self.record(SimulationStepKind::PacketDropped(PacketDropped {
             packet_id: data.id,
             node_id: current_node.id().clone(),
-            random: false,
+            injected: false,
         }));
 
         println!(
@@ -111,17 +115,15 @@ impl SimulationStepTracer {
         current_node: &Node,
     ) {
         if !extra_delay.is_zero() {
-            self.record(SimulationStepKind::PacketExtraDelay(
-                PacketAffectedByRandomEvent {
-                    packet_id: data.id,
-                    node_id: current_node.id().clone(),
-                    payload: extra_delay,
-                },
-            ));
+            self.record(SimulationStepKind::PacketExtraDelay(PacketHasExtraDelay {
+                packet_id: data.id,
+                node_id: current_node.id().clone(),
+                extra_delay,
+            }));
         }
 
         if duplicate {
-            self.record(SimulationStepKind::PacketDuplicated(PacketInNode {
+            self.record(SimulationStepKind::PacketDuplicated(GenericPacketEvent {
                 packet_id: data.id,
                 packet_number: data.number,
                 packet_size_bytes: data.transmit.contents.len(),
@@ -137,12 +139,14 @@ impl SimulationStepTracer {
         }
 
         if congestion_experienced {
-            self.record(SimulationStepKind::PacketCongestionEvent(PacketInNode {
-                packet_id: data.id,
-                packet_number: data.number,
-                packet_size_bytes: data.transmit.contents.len(),
-                node_id: current_node.id().clone(),
-            }));
+            self.record(SimulationStepKind::PacketCongestionEvent(
+                GenericPacketEvent {
+                    packet_id: data.id,
+                    packet_number: data.number,
+                    packet_size_bytes: data.transmit.contents.len(),
+                    node_id: current_node.id().clone(),
+                },
+            ));
 
             println!(
                 "{:.2}s WARN {} marked packet with CE ECN (#{})!",

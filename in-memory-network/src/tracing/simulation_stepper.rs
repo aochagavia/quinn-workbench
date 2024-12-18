@@ -1,6 +1,6 @@
 use crate::network::spec::NetworkNodeSpec;
 use crate::tracing::simulation_step::{
-    PacketDropped, PacketInNode, SimulationStep, SimulationStepKind,
+    GenericPacketEvent, PacketDropped, SimulationStep, SimulationStepKind,
 };
 use crate::tracing::stats::{NodeStats, PacketStats};
 use std::collections::HashMap;
@@ -166,11 +166,11 @@ struct ReplayedNode {
 }
 
 impl ReplayedNode {
-    fn packet_created(&mut self, s: &PacketInNode) {
+    fn packet_created(&mut self, s: &GenericPacketEvent) {
         self.add_packet_to_buffer(s.packet_id, s.packet_size_bytes);
     }
 
-    fn packet_received(&mut self, s: &PacketInNode) {
+    fn packet_received(&mut self, s: &GenericPacketEvent) {
         if self.highest_received > s.packet_number {
             self.reordered_packets_received
                 .track_one(s.packet_size_bytes);
@@ -181,7 +181,7 @@ impl ReplayedNode {
         self.add_packet_to_buffer(s.packet_id, s.packet_size_bytes);
     }
 
-    fn packet_duplicated(&mut self, s: &PacketInNode) {
+    fn packet_duplicated(&mut self, s: &GenericPacketEvent) {
         self.duplicated_packets.track_one(s.packet_size_bytes);
         self.add_packet_to_buffer(s.packet_id, s.packet_size_bytes);
     }
@@ -196,7 +196,7 @@ impl ReplayedNode {
         self.dropped_packets.track_one(packet.size_bytes);
     }
 
-    fn packet_ecn(&mut self, s: &PacketInNode) {
+    fn packet_ecn(&mut self, s: &GenericPacketEvent) {
         self.ecn_packets.track_one(s.packet_size_bytes);
     }
 
