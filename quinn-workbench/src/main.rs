@@ -23,6 +23,7 @@ use quinn_proto::congestion::NewRenoConfig;
 use quinn_proto::AckFrequencyConfig;
 use rustls::pki_types::PrivatePkcs8KeyDer;
 use serde::de::DeserializeOwned;
+use std::fs;
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
@@ -260,7 +261,12 @@ async fn run(
     let total_time_sec = start.elapsed().as_secs_f64();
     println!("{:.2}s Connection closed", total_time_sec);
 
-    // let rtt_sec = simulated_link_delay.as_secs_f64() * 2.0;
+    println!("--- Replay log ---");
+    let replay_log_path = "replay-log.json";
+    let json_steps = serde_json::to_vec_pretty(&tracer.steps()).unwrap();
+    fs::write(replay_log_path, json_steps).context("failed to store replay log")?;
+    println!("* Replay log available at {replay_log_path}");
+
     println!("--- Stats ---");
     println!(
         "* Time from start to connection closed: {:.2}s",

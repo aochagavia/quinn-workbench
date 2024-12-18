@@ -499,6 +499,8 @@ dependencies = [
  "pnet_packet",
  "quinn",
  "rcgen",
+ "serde",
+ "serde_with",
  "tokio",
  "uuid",
 ]

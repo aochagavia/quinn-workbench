@@ -4,6 +4,7 @@ pub mod network;
 pub mod pcap_exporter;
 pub mod quinn_interop;
 pub mod tracing;
+mod util;
 
 use crate::network::node::Host;
 use quinn::udp::EcnCodepoint;
