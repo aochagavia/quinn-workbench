@@ -14,8 +14,7 @@ use crate::network::event::{NetworkEvent, NetworkEventPayload, UpdateLinkStatus}
 use crate::network::node::{Host, HostHandle, Node};
 use crate::network::outbound_buffer::OutboundBuffer;
 use crate::network::spec::{NetworkSpec, NodeKind};
-use crate::pcap_exporter::PcapExporter;
-use crate::stats_tracker::{EndpointStats, NetworkStats, NetworkStatsTracker};
+use crate::tracing::tracer::SimulationStepTracer;
 use crate::{InTransitData, OwnedTransmit};
 use anyhow::bail;
 use fastrand::Rng;
@@ -30,6 +29,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
+use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 pub struct PacketArrived {
@@ -51,13 +51,9 @@ pub struct InMemoryNetwork {
     links_by_addr: Arc<HashMap<(IpAddr, IpAddr), Arc<Mutex<NetworkLink>>>>,
     /// Map from ids the corresponding links
     links_by_id: Arc<HashMap<Arc<str>, Arc<Mutex<NetworkLink>>>>,
-    pcap_exporter: Arc<PcapExporter>,
-    stats_tracker: NetworkStatsTracker,
+    pub(crate) tracer: Arc<SimulationStepTracer>,
     rng: Mutex<Rng>,
-    start: Instant,
     next_transmit_number: AtomicU64,
-    packet_arrived_tx: tokio::sync::broadcast::Sender<PacketArrived>,
-    packet_arrived_rx: tokio::sync::broadcast::Receiver<PacketArrived>,
 }
 
 impl InMemoryNetwork {
@@ -65,7 +61,7 @@ impl InMemoryNetwork {
     pub fn initialize(
         network_spec: NetworkSpec,
         mut events: Vec<NetworkEvent>,
-        pcap_exporter: Arc<PcapExporter>,
+        tracer: Arc<SimulationStepTracer>,
         rng: Rng,
         start: Instant,
     ) -> anyhow::Result<Arc<Self>> {
@@ -94,11 +90,10 @@ impl InMemoryNetwork {
             );
         }
 
-        let stats_tracker = NetworkStatsTracker::new();
         let host_a = hosts.remove(0);
-        let host_a = Host::from_network_node(host_a, stats_tracker.clone(), start)?;
+        let host_a = Host::from_network_node(host_a)?;
         let host_b = hosts.remove(0);
-        let host_b = Host::from_network_node(host_b, stats_tracker.clone(), start)?;
+        let host_b = Host::from_network_node(host_b)?;
         let hosts_by_addr = [host_a.clone(), host_b.clone()]
             .into_iter()
             .map(|h| (h.addr, h))
@@ -117,11 +112,7 @@ impl InMemoryNetwork {
             let id = l.id.clone();
             let source = l.source;
             let target = l.target;
-            let l = Arc::new(Mutex::new(NetworkLink::new(
-                start,
-                l,
-                stats_tracker.clone(),
-            )));
+            let l = Arc::new(Mutex::new(NetworkLink::new(l, tracer.clone())));
             let conflicting_link = links_by_addr.insert((source, target), l.clone());
             if let Some(conflicting_link) = conflicting_link {
                 bail!(
@@ -174,8 +165,6 @@ impl InMemoryNetwork {
             }
         }
 
-        let (tx, rx) = tokio::sync::broadcast::channel(10);
-
         let network = Arc::new(Self {
             host_a,
             host_b,
@@ -184,13 +173,9 @@ impl InMemoryNetwork {
             routes_by_addr: Arc::new(routes_by_addr),
             links_by_addr: Arc::new(links_by_addr),
             links_by_id: Arc::new(links_by_id),
-            pcap_exporter,
-            stats_tracker,
+            tracer,
             rng: Mutex::new(rng),
-            start,
             next_transmit_number: Default::default(),
-            packet_arrived_tx: tx,
-            packet_arrived_rx: rx,
         });
 
         // Process events in the background
@@ -258,12 +243,18 @@ impl InMemoryNetwork {
         Ok(network)
     }
 
-    pub fn subscribe_to_packet_arrived(&self) -> tokio::sync::broadcast::Receiver<PacketArrived> {
-        self.packet_arrived_rx.resubscribe()
+    /// Returns host A
+    pub fn host_a(self: &InMemoryNetwork) -> &Host {
+        &self.host_a
+    }
+
+    /// Returns host B
+    pub fn host_b(self: &InMemoryNetwork) -> &Host {
+        &self.host_b
     }
 
     /// Returns a handle to host A
-    pub fn host_a(self: &Arc<InMemoryNetwork>) -> HostHandle {
+    pub fn host_a_handle(self: &Arc<InMemoryNetwork>) -> HostHandle {
         HostHandle {
             host: self.host_a.clone(),
             network: self.clone(),
@@ -271,7 +262,7 @@ impl InMemoryNetwork {
     }
 
     /// Returns a handle to host B
-    pub fn host_b(self: &Arc<InMemoryNetwork>) -> HostHandle {
+    pub fn host_b_handle(self: &Arc<InMemoryNetwork>) -> HostHandle {
         HostHandle {
             host: self.host_b.clone(),
             network: self.clone(),
@@ -285,9 +276,7 @@ impl InMemoryNetwork {
 
     pub async fn assert_connectivity_between_hosts(
         self: &Arc<Self>,
-    ) -> anyhow::Result<(Instant, Instant)> {
-        let now = Instant::now();
-
+    ) -> anyhow::Result<(Duration, Duration)> {
         let peers = [
             (&self.host_a, self.host_b.addr),
             (&self.host_b, self.host_a.addr),
@@ -296,8 +285,7 @@ impl InMemoryNetwork {
         // Send a packet both ways
         for (source, target_addr) in peers {
             let data = self.in_transit_data(
-                now,
-                source.addr,
+                source.clone(),
                 OwnedTransmit {
                     destination: target_addr,
                     ecn: None,
@@ -306,7 +294,7 @@ impl InMemoryNetwork {
                 },
             );
 
-            self.send(now, Node::Host(source.clone()), data);
+            self.forward(Node::Host(source.clone()), data);
         }
 
         // Wait for 90 days for the packets to arrive
@@ -324,22 +312,16 @@ impl InMemoryNetwork {
             bail!("failed to deliver packets between the hosts after {days} days (A to B {}, B to A {})", report(a_to_b_failed), report(b_to_a_failed));
         }
 
-        Ok((
-            a_to_b[0].path.last().unwrap().0,
-            b_to_a[0].path.last().unwrap().0,
-        ))
-    }
+        let stepper = self.tracer.stepper();
 
-    fn node_to_host(&self, node: &Node) -> Option<&Host> {
-        let mut addresses = node.addresses();
-        match (addresses.next(), addresses.next()) {
-            (Some(addr), None) => self
-                .hosts_by_addr
-                .iter()
-                .find(|(key, _)| key.ip() == addr)
-                .map(|(_, host)| host),
-            _ => None,
-        }
+        Ok((
+            stepper
+                .get_packet_arrived_at(a_to_b[0].id, &self.host_b.id)
+                .unwrap(),
+            stepper
+                .get_packet_arrived_at(b_to_a[0].id, &self.host_a.id)
+                .unwrap(),
+        ))
     }
 
     /// Resolves the link that should be used to go from the node to the destination
@@ -368,36 +350,31 @@ impl InMemoryNetwork {
         None
     }
 
-    pub(crate) fn in_transit_data(
-        &self,
-        now: Instant,
-        source_addr: SocketAddr,
-        transmit: OwnedTransmit,
-    ) -> InTransitData {
-        let source_host = self.host(source_addr);
+    pub(crate) fn in_transit_data(&self, source: Host, transmit: OwnedTransmit) -> InTransitData {
         InTransitData {
-            source_addr,
+            id: Uuid::new_v4(),
+            duplicate: false,
+            source,
             transmit,
             number: self.next_transmit_number.fetch_add(1, Ordering::Relaxed),
-            path: vec![(now, source_host.id.clone())],
         }
     }
 
-    /// Sends an [`InTransitData`] from one node to the next
-    pub(crate) fn send(
+    /// Forwards an [`InTransitData`] to the next node in the network.
+    ///
+    /// Resolves the link through which the packet should be sent and attempts to send it right
+    /// away. If the link is temporarily unavailable or saturated, stores the packet in the node's
+    /// buffer (or drops it when the buffer is full).
+    pub(crate) fn forward(
         self: &Arc<InMemoryNetwork>,
-        now: Instant,
         current_node: Node,
         mut data: InTransitData,
     ) {
-        let mut randomly_dropped = false;
-        let mut duplicate = false;
-        let congestion_experienced;
-        let mut extra_delay = Duration::from_secs(0);
-        let transmit_destination_addr = data.transmit.destination;
+        self.tracer.track_packet_in_node(&current_node, &data);
 
         let Some(link) = self.resolve_link(&current_node, data.transmit.destination) else {
-            let nodes: Vec<_> = data.path.into_iter().map(|(_, n)| n).collect();
+            let stepper = self.tracer.stepper();
+            let nodes: Vec<_> = stepper.get_packet_path(data.id);
             let mut path = nodes.join(" -> ");
             path.push_str(" -> ?");
 
@@ -407,6 +384,11 @@ impl InMemoryNetwork {
             );
             return;
         };
+
+        let mut randomly_dropped = false;
+        let mut duplicate = false;
+        let congestion_experienced;
+        let mut extra_delay = Duration::from_secs(0);
 
         // Concurrency: limit the lock guard's lifetime
         {
@@ -427,30 +409,7 @@ impl InMemoryNetwork {
         }
 
         if randomly_dropped {
-            // Only track randomly dropped packets for hosts, not for routers
-            if let Some(source) = self.node_to_host(&current_node) {
-                let source_name = &source.id;
-                self.pcap_exporter.track_packet(
-                    now,
-                    &data,
-                    &source.addr,
-                    data.transmit.ecn,
-                    true,
-                    Duration::from_secs(0),
-                );
-                self.stats_tracker.track_dropped(
-                    source.addr,
-                    data.transmit.contents.len(),
-                    self.pcap_exporter.total_tracked_packets(),
-                );
-
-                println!(
-                    "{:.2}s WARN {source_name} packet lost (#{})!",
-                    self.start.elapsed().as_secs_f64(),
-                    self.pcap_exporter.total_tracked_packets(),
-                );
-            }
-
+            self.tracer.track_dropped_randomly(&data, &current_node);
             return;
         }
 
@@ -465,10 +424,27 @@ impl InMemoryNetwork {
             data.transmit.ecn = Some(EcnCodepoint::from_bits(0b11).unwrap())
         }
 
-        let total = if duplicate { 2 } else { 1 };
-        let packets = vec![data; total];
+        let transmit_destination_addr = data.transmit.destination;
 
-        for (i, packet) in packets.into_iter().enumerate() {
+        let maybe_duplicate = duplicate.then(|| {
+            let mut duplicate_data = data.clone();
+            duplicate_data.id = Uuid::new_v4();
+            duplicate_data.duplicate = true;
+            duplicate_data
+        });
+
+        let mut packets = vec![data];
+        packets.extend(maybe_duplicate);
+
+        for packet in packets.into_iter() {
+            self.tracer.track_injected_failures(
+                &packet,
+                duplicate && packet.duplicate,
+                extra_delay,
+                congestion_experienced,
+                &current_node,
+            );
+
             let link_is_saturated = !link.lock().has_bandwidth_available(&packet);
             if link_is_saturated {
                 // Try to enqueue the data on the node's outbound buffer for later sending
@@ -479,8 +455,8 @@ impl InMemoryNetwork {
                     // The buffer has capacity!
                     let sent = NetworkLink::send_when_bandwidth_available(
                         link.clone(),
+                        current_node.clone(),
                         packet,
-                        None,
                         extra_delay,
                     );
                     let network = self.clone();
@@ -502,119 +478,18 @@ impl InMemoryNetwork {
                 } else {
                     // The buffer is full and the packet is being dropped
                     let link = link.lock();
-                    println!(
-                        "{:.2}s WARN packet dropped by link because it was saturated and node buffer was full: {}!",
-                        self.start.elapsed().as_secs_f64(),
-                        link.id,
-                    );
+                    self.tracer
+                        .track_dropped_from_buffer(&packet, &current_node, &link);
                 }
 
                 // The link is saturated, so there's nothing else to do for this packet
                 continue;
             }
 
-            let duplicate = i == 1;
-            let mut metadata_index = None;
-
-            // Only track duplicate packets for hosts, not for routers
-            if let Some(source) = self.node_to_host(&current_node) {
-                let source_name = &source.id;
-                self.pcap_exporter.track_packet(
-                    now,
-                    &packet,
-                    &source.addr,
-                    packet.transmit.ecn,
-                    false,
-                    extra_delay,
-                );
-                metadata_index = Some(self.stats_tracker.track_sent(
-                    source.addr,
-                    packet.transmit.contents.len(),
-                    duplicate,
-                    self.pcap_exporter.total_tracked_packets(),
-                    congestion_experienced,
-                ));
-
-                if duplicate {
-                    println!(
-                        "{:.2}s WARN {source_name} sent duplicate packet (#{})!",
-                        self.start.elapsed().as_secs_f64(),
-                        self.pcap_exporter.total_tracked_packets(),
-                    );
-                }
-
-                if packet.transmit.ecn.is_some_and(|t| t == EcnCodepoint::Ce) {
-                    println!(
-                        "{:.2}s WARN {source_name} sent packet marked with CE ECN (#{})!",
-                        self.start.elapsed().as_secs_f64(),
-                        self.pcap_exporter.total_tracked_packets(),
-                    );
-                }
-            }
-
-            link.lock().send(packet, metadata_index, extra_delay);
+            link.lock().send(&current_node, packet, extra_delay);
         }
 
         schedule_forward_packet(self.clone(), link.clone(), transmit_destination_addr);
-    }
-
-    pub(crate) fn notify_packet_arrived(&self, path: Vec<(Instant, Arc<str>)>, content: Vec<u8>) {
-        self.packet_arrived_tx
-            .send(PacketArrived { path, content })
-            .unwrap();
-    }
-
-    pub fn stats(&self) -> NetworkStats {
-        let stats_tracker = self.stats_tracker.inner.lock();
-
-        let peer_a_addr = self.host_a.addr;
-        let mut peer_a = EndpointStats::default();
-        let peer_b_addr = self.host_b.addr;
-        let mut peer_b = EndpointStats::default();
-
-        for metadata in &stats_tracker.transmits_metadata {
-            let endpoint_stats = match metadata.source {
-                addr if addr == peer_a_addr => &mut peer_b,
-                addr if addr == peer_b_addr => &mut peer_a,
-                _ => unreachable!(),
-            };
-
-            if metadata.dropped {
-                endpoint_stats.dropped.packets += 1;
-                endpoint_stats.dropped.bytes += metadata.byte_size;
-            } else {
-                endpoint_stats.sent.packets += 1;
-                endpoint_stats.sent.bytes += metadata.byte_size;
-            }
-        }
-
-        for metadata in &stats_tracker.transmits_metadata {
-            if metadata.dropped {
-                continue;
-            }
-
-            let endpoint_stats = match metadata.source {
-                addr if addr == peer_a_addr => &mut peer_b,
-                addr if addr == peer_b_addr => &mut peer_a,
-                _ => unreachable!(),
-            };
-
-            if metadata.out_of_order {
-                endpoint_stats.out_of_order.packets += 1;
-                endpoint_stats.out_of_order.bytes += metadata.byte_size;
-            }
-
-            if metadata.duplicate {
-                endpoint_stats.duplicates.packets += 1;
-                endpoint_stats.duplicates.bytes += metadata.byte_size;
-            }
-
-            if metadata.congestion_experienced {
-                endpoint_stats.congestion_experienced += 1;
-            }
-        }
-
-        NetworkStats { peer_b, peer_a }
     }
 }
 
@@ -634,12 +509,8 @@ fn schedule_forward_packet(
         // the next hop (hence the `network.send`)
         let network = network.clone();
         let router = router.clone();
-        schedule_forward_packet_inner(link.clone(), next_receive, move |mut transmit| {
-            // Update the packet's path
-            transmit.path.push((Instant::now(), router.id.clone()));
-
-            // Send to next hop
-            network.send(Instant::now(), Node::Router(router.clone()), transmit);
+        schedule_forward_packet_inner(link.clone(), next_receive, move |transmit| {
+            network.forward(Node::Router(router.clone()), transmit);
         });
     } else {
         // The packet should be forwarded to the final host's inbound queue (from where it will
@@ -647,10 +518,15 @@ fn schedule_forward_packet(
         let host = network
             .hosts_by_addr
             .get(&transmit_destination_addr)
-            .unwrap();
+            .unwrap()
+            .clone();
         let host_queue = host.inbound.clone();
+
         schedule_forward_packet_inner(link.clone(), next_receive, move |transmit| {
-            host_queue.lock().send(transmit, None, Duration::default())
+            network
+                .tracer
+                .track_packet_in_node(&Node::Host(host.clone()), &transmit);
+            host_queue.lock().send(transmit, Duration::default())
         });
     };
 }

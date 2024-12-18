@@ -8,8 +8,10 @@ use config::cli::CliOpt;
 use config::quinn::QuinnJsonConfig;
 use fastrand::Rng;
 use in_memory_network::network::node::HostHandle;
+use in_memory_network::network::spec::NetworkSpec;
 use in_memory_network::network::InMemoryNetwork;
 use in_memory_network::pcap_exporter::PcapExporter;
+use in_memory_network::tracing::tracer::SimulationStepTracer;
 use quinn::crypto::rustls::QuicClientConfig;
 use quinn::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use quinn::rustls::RootCertStore;
@@ -160,7 +162,10 @@ async fn run(
             .into_iter()
             .map(|e| e.into())
             .collect(),
-        network_check_pcap_exporter,
+        Arc::new(SimulationStepTracer::new(
+            network_check_pcap_exporter,
+            config.network_graph.clone().into(),
+        )),
         Rng::with_seed(simulated_network_rng_seed),
         start,
     )?;
@@ -170,8 +175,8 @@ async fn run(
     let (arrived1, arrived2) = network.assert_connectivity_between_hosts().await?;
     println!(
         "* Connectivity check passed (packets arrived after {} ms and {} ms)",
-        (arrived1 - start).as_millis(),
-        (arrived2 - start).as_millis()
+        arrived1.as_millis(),
+        arrived2.as_millis()
     );
 
     drop(network);
@@ -179,14 +184,19 @@ async fn run(
     let start = Instant::now();
 
     // Network
+    let network_spec: NetworkSpec = config.network_graph.into();
+    let tracer = Arc::new(SimulationStepTracer::new(
+        pcap_exporter,
+        network_spec.clone(),
+    ));
     let network = InMemoryNetwork::initialize(
-        config.network_graph.into(),
+        network_spec,
         config
             .network_events
             .into_iter()
             .map(|e| e.into())
             .collect(),
-        pcap_exporter.clone(),
+        tracer.clone(),
         Rng::with_seed(simulated_network_rng_seed),
         start,
     )?;
@@ -199,7 +209,7 @@ async fn run(
 
     // Let a server listen in the background
     let mut quinn_rng = Rng::with_seed(quinn_rng_seed);
-    let server_host = network.host_a();
+    let server_host = network.host_a_handle();
     let server_addr = server_host.addr();
     let server = server_endpoint(
         cert.clone(),
@@ -212,7 +222,7 @@ async fn run(
 
     // Make repeated requests
     println!("--- Requests ---");
-    let client = client_endpoint(cert, network.host_b(), &config.quinn, &mut quinn_rng)?;
+    let client = client_endpoint(cert, network.host_b_handle(), &config.quinn, &mut quinn_rng)?;
     println!("{:.2}s CONNECT", start.elapsed().as_secs_f64());
     let connection = client
         .connect(server_addr, server_name)
@@ -257,28 +267,43 @@ async fn run(
         total_time_sec,
     );
 
-    let stats = network.stats();
-    for (name, stats) in [("Client", stats.peer_b), ("Server", stats.peer_a)] {
+    let stats = tracer.stats();
+    for name in [&network.host_b().id, &network.host_a().id] {
+        let stats = &stats.by_node[name];
+
+        println!("* {name}");
+
         println!(
-            "* {name} packets successfully sent: {} ({} bytes)",
+            "  * Sent packets: {} ({} bytes)",
             stats.sent.packets, stats.sent.bytes,
         );
         println!(
-            "  * From the above packets, {} were duplicates ({} bytes)",
+            "    | {} packets duplicated in transit ({} bytes)",
             stats.duplicates.packets, stats.duplicates.bytes
         );
         println!(
-            "  * From the above packets, {} were received out of order by the peer ({} bytes)",
-            stats.out_of_order.packets, stats.out_of_order.bytes
+            "    | {} packets marked with the CE ECN codepoint in transit ({} bytes)",
+            stats.congestion_experienced.packets, stats.congestion_experienced.bytes
         );
         println!(
-            "  * From the above packets, {} were marked with the CE ECN codepoint",
-            stats.congestion_experienced
-        );
-        println!(
-            "* {name} packets dropped: {} ({} bytes)",
+            "    | {} packets dropped in transit ({} bytes)",
             stats.dropped.packets, stats.dropped.bytes
         );
+        println!(
+            "  * Received packets: {} ({} bytes)",
+            stats.received.packets, stats.received.bytes
+        );
+        println!(
+            "    | {} packets received out of order ({} bytes)",
+            stats.received_out_of_order.packets, stats.received_out_of_order.bytes
+        );
+    }
+
+    println!("--- Max buffer usage per node ---");
+    let mut buffer_usage: Vec<_> = stats.by_node.iter().collect();
+    buffer_usage.sort_unstable_by_key(|tup| tup.1.max_buffer_usage);
+    for (node_id, stats) in buffer_usage.into_iter().rev() {
+        println!("* {node_id}: {} bytes", stats.max_buffer_usage);
     }
 
     Ok(())

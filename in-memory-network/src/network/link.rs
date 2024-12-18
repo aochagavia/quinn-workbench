@@ -1,7 +1,8 @@
 use crate::network::event::UpdateLinkStatus;
 use crate::network::inbound_queue::InboundQueue;
+use crate::network::node::Node;
 use crate::network::spec::NetworkLinkSpec;
-use crate::stats_tracker::NetworkStatsTracker;
+use crate::tracing::tracer::SimulationStepTracer;
 use crate::InTransitData;
 use futures_util::future::Shared;
 use futures_util::FutureExt;
@@ -16,6 +17,7 @@ use tokio::time::Instant;
 pub struct NetworkLink {
     pub id: Arc<str>,
     pub target: IpAddr,
+    tracer: Arc<SimulationStepTracer>,
     queue: InboundQueue,
     rate_calculator: DataRateCalculator,
     packets_waiting_for_bandwidth: VecDeque<(InTransitData, tokio::sync::oneshot::Sender<()>)>,
@@ -53,16 +55,13 @@ impl LinkStatus {
 }
 
 impl NetworkLink {
-    pub(crate) fn new(
-        start: Instant,
-        l: NetworkLinkSpec,
-        stats_tracker: NetworkStatsTracker,
-    ) -> Self {
+    pub(crate) fn new(l: NetworkLinkSpec, tracer: Arc<SimulationStepTracer>) -> Self {
         Self {
             id: l.id,
             status: LinkStatus::Up,
+            tracer,
             target: l.target,
-            queue: InboundQueue::new(stats_tracker, start),
+            queue: InboundQueue::new(),
             rate_calculator: DataRateCalculator::new(l.bandwidth_bps),
             packets_waiting_for_bandwidth: VecDeque::new(),
             delay: l.delay,
@@ -105,29 +104,28 @@ impl NetworkLink {
         }
     }
 
-    pub(crate) fn send(
-        &mut self,
-        data: InTransitData,
-        metadata_index: Option<usize>,
-        extra_delay: Duration,
-    ) {
+    pub(crate) fn send(&mut self, current_node: &Node, data: InTransitData, extra_delay: Duration) {
         // Sanity check
         assert!(self
             .rate_calculator
             .has_bandwidth_available(Instant::now(), data.transmit.contents.len()));
         assert!(matches!(self.status, LinkStatus::Up));
 
+        // Record
+        self.tracer.track_sent_in_pcap(&data, &current_node);
+        self.tracer
+            .track_packet_in_transit(current_node, self, &data);
+
         // Send
         self.rate_calculator
             .track_send(data.transmit.contents.len());
-        self.queue
-            .send(data, metadata_index, self.delay + extra_delay);
+        self.queue.send(data, self.delay + extra_delay);
     }
 
     pub(crate) fn send_when_bandwidth_available(
         this: Arc<Mutex<Self>>,
+        node: Node,
         data: InTransitData,
-        metadata_index: Option<usize>,
         extra_delay: Duration,
     ) -> tokio::sync::oneshot::Receiver<()> {
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -169,8 +167,7 @@ impl NetworkLink {
                     let (data, sent_tx) = link.packets_waiting_for_bandwidth.pop_front().unwrap();
 
                     // Send
-
-                    link.send(data, metadata_index, extra_delay);
+                    link.send(&node, data, extra_delay);
 
                     // Notify that the data has been sent
                     sent_tx.send(()).ok();

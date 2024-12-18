@@ -1,39 +1,25 @@
-use crate::stats_tracker::NetworkStatsTracker;
 use crate::InTransitData;
 use std::collections::BinaryHeap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::Waker;
 use std::time::Duration;
 use tokio::time::Instant;
 
 pub struct InboundQueue {
     queue: BinaryHeap<PrioritizedInTransitData>,
-    highest_received_transmit_number: AtomicU64,
-    stats_tracker: NetworkStatsTracker,
-    start: Instant,
     notify_new_transmit: Option<Waker>,
 }
 
 impl InboundQueue {
-    pub(crate) fn new(stats_tracker: NetworkStatsTracker, start: Instant) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             queue: BinaryHeap::new(),
-            highest_received_transmit_number: Default::default(),
-            stats_tracker,
-            start,
             notify_new_transmit: None,
         }
     }
 
-    pub(crate) fn send(
-        &mut self,
-        data: InTransitData,
-        metadata_index: Option<usize>,
-        delay: Duration,
-    ) {
+    pub(crate) fn send(&mut self, data: InTransitData, delay: Duration) {
         self.queue.push(PrioritizedInTransitData {
             data,
-            metadata_index,
             sent: Instant::now(),
             delay,
         });
@@ -60,9 +46,6 @@ impl InboundQueue {
 
     pub(crate) fn receive(&mut self, max_transmits: usize) -> Vec<InTransitData> {
         let now = Instant::now();
-        let mut highest_received = self
-            .highest_received_transmit_number
-            .load(Ordering::Relaxed);
         let mut received = Vec::new();
 
         for _ in 0..max_transmits {
@@ -72,27 +55,11 @@ impl InboundQueue {
                 .is_some_and(|next| next.arrival_time() <= now)
             {
                 let data = self.queue.pop().unwrap();
-
-                // Keep track of out-of-order packets if there's metadata about the packet
-                if let Some(metadata_index) = data.metadata_index {
-                    if data.data.number < highest_received {
-                        let pcap_number = self.stats_tracker.track_out_of_order(metadata_index);
-                        println!(
-                            "{:.2}s WARN Received reordered packet (#{pcap_number}) after it was delayed",
-                            self.start.elapsed().as_secs_f64(),
-                        );
-                    }
-                }
-
-                highest_received = highest_received.max(data.data.number);
                 received.push(data.data);
             } else {
                 break;
             }
         }
-
-        self.highest_received_transmit_number
-            .store(highest_received, Ordering::Relaxed);
 
         received
     }
@@ -105,7 +72,6 @@ impl InboundQueue {
 // In transit data, sorted by arrival time
 struct PrioritizedInTransitData {
     data: InTransitData,
-    metadata_index: Option<usize>,
     sent: Instant,
     delay: Duration,
 }

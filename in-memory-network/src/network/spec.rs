@@ -3,11 +3,13 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[derive(Clone)]
 pub struct NetworkSpec {
     pub nodes: Vec<NetworkNodeSpec>,
     pub links: Vec<NetworkLinkSpec>,
 }
 
+#[derive(Clone)]
 pub struct NetworkNodeSpec {
     pub id: String,
     pub kind: NodeKind,
@@ -21,10 +23,12 @@ pub enum NodeKind {
     Router,
 }
 
+#[derive(Clone)]
 pub struct NetworkInterface {
     pub addresses: Vec<IpAddr>,
 }
 
+#[derive(Clone)]
 pub struct NetworkLinkSpec {
     pub id: Arc<str>,
     pub source: IpAddr,

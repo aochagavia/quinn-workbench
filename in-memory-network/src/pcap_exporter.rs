@@ -60,18 +60,11 @@ impl PcapExporter {
         std::fs::write(path, bytes).unwrap();
     }
 
-    pub fn total_tracked_packets(&self) -> u64 {
-        self.total_tracked_packets.load(Ordering::Relaxed)
-    }
-
     pub fn track_packet(
         &self,
-        now: Instant,
         data: &InTransitData,
         source_addr: &SocketAddr,
         ecn: Option<EcnCodepoint>,
-        dropped: bool,
-        extra_delay: Duration,
     ) {
         let transmit = &data.transmit;
         let IpAddr::V4(source) = source_addr.ip() else {
@@ -121,29 +114,15 @@ impl PcapExporter {
 
         self.total_tracked_packets.fetch_add(1, Ordering::Relaxed);
 
-        let mut options = vec![EnhancedPacketOption::Comment(
+        let options = vec![EnhancedPacketOption::Comment(
             format!("Transmit no. {}", data.number).into(),
         )];
-
-        if dropped {
-            options.push(EnhancedPacketOption::Comment(
-                "This packet was lost in transit!".into(),
-            ));
-        } else if !extra_delay.is_zero() {
-            options.push(EnhancedPacketOption::Comment(
-                format!(
-                    "This packet had an additional delay of {:.2}s",
-                    extra_delay.as_secs_f64()
-                )
-                .into(),
-            ));
-        }
 
         let mut writer = self.writer.lock();
         writer
             .write_pcapng_block(EnhancedPacketBlock {
                 interface_id: 0,
-                timestamp: correct_timestamp(now - self.capture_start),
+                timestamp: correct_timestamp(self.capture_start.elapsed()),
                 original_len: ip_packet.len() as u32,
                 data: ip_packet.into(),
                 options,
