@@ -2,21 +2,28 @@ use crate::network::inbound_queue::InboundQueue;
 use crate::network::outbound_buffer::OutboundBuffer;
 use crate::network::spec::{NetworkNodeSpec, NodeKind};
 use crate::network::InMemoryNetwork;
-use crate::stats_tracker::NetworkStatsTracker;
 use crate::HOST_PORT;
 use anyhow::bail;
 use parking_lot::Mutex;
 use std::fmt::{Debug, Formatter};
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use tokio::time::Instant;
 
+#[derive(Clone)]
 pub enum Node {
     Host(Host),
     Router(Arc<Router>),
 }
 
 impl Node {
+    pub fn id(&self) -> &Arc<str> {
+        match self {
+            Node::Host(h) => &h.id,
+            Node::Router(r) => &r.id,
+        }
+    }
+
     pub fn addresses(&self) -> impl Iterator<Item = IpAddr> {
         match self {
             Node::Host(host) => vec![host.addr.ip()].into_iter(),
@@ -51,18 +58,15 @@ impl Debug for HostHandle {
 
 #[derive(Clone)]
 pub struct Host {
+    pub id: Arc<str>,
     pub(crate) addr: SocketAddr,
-    pub(crate) id: Arc<str>,
+    pub(crate) highest_received_packet_number: Arc<AtomicU64>,
     pub(crate) inbound: Arc<Mutex<InboundQueue>>,
     outbound: Arc<OutboundBuffer>,
 }
 
 impl Host {
-    pub(crate) fn from_network_node(
-        node: NetworkNodeSpec,
-        stats_tracker: NetworkStatsTracker,
-        start: Instant,
-    ) -> anyhow::Result<Self> {
+    pub(crate) fn from_network_node(node: NetworkNodeSpec) -> anyhow::Result<Self> {
         if node.kind != NodeKind::Host {
             bail!(
                 "Attempted to create a host from a node that is not a host: {}",
@@ -79,7 +83,8 @@ impl Host {
         Ok(Self {
             addr: SocketAddr::new(node_address, HOST_PORT),
             id: Arc::from(node.id.into_boxed_str()),
-            inbound: Arc::new(Mutex::new(InboundQueue::new(stats_tracker.clone(), start))),
+            highest_received_packet_number: Arc::new(Default::default()),
+            inbound: Arc::new(Mutex::new(InboundQueue::new())),
 
             // Hosts have no outbound queue, which is equivalent to a zero-capacity queue
             outbound: Arc::new(OutboundBuffer::new(0)),

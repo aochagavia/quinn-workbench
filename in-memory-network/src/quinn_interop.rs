@@ -5,9 +5,9 @@ use quinn::{AsyncUdpSocket, UdpPoller};
 use std::io::IoSliceMut;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::time::Instant;
 
 #[derive(Debug)]
 pub struct InMemoryUdpPoller;
@@ -28,10 +28,8 @@ impl AsyncUdpSocket for HostHandle {
         // packet
         assert!(transmit.segment_size.is_none());
 
-        let now = Instant::now();
         let data = self.network.in_transit_data(
-            now,
-            self.addr(),
+            self.host.clone(),
             OwnedTransmit {
                 destination: transmit.destination,
                 ecn: transmit.ecn,
@@ -39,7 +37,7 @@ impl AsyncUdpSocket for HostHandle {
                 segment_size: transmit.segment_size,
             },
         );
-        self.network.send(now, Node::Host(self.host.clone()), data);
+        self.network.forward(Node::Host(self.host.clone()), data);
 
         Ok(())
     }
@@ -55,19 +53,25 @@ impl AsyncUdpSocket for HostHandle {
 
         let max_transmits = meta.len();
         let mut received = 0;
+        let mut highest_received = self
+            .host
+            .highest_received_packet_number
+            .load(Ordering::SeqCst);
 
         let out = meta.iter_mut().zip(bufs);
         for (in_transit, (meta, buf)) in inbound.receive(max_transmits).into_iter().zip(out) {
+            if in_transit.number < highest_received {
+                self.network
+                    .tracer
+                    .track_out_of_order_packet_received_by_host(&in_transit);
+            }
+            highest_received = highest_received.max(in_transit.number);
+
             received += 1;
             let transmit = in_transit.transmit;
 
-            let mut path = in_transit.path;
-            path.push((Instant::now(), self.network.host(self.addr()).id.clone()));
-            self.network
-                .notify_packet_arrived(path, transmit.contents.clone());
-
             // Meta
-            meta.addr = in_transit.source_addr;
+            meta.addr = in_transit.source.addr;
             meta.ecn = transmit.ecn;
             meta.dst_ip = Some(transmit.destination.ip());
             meta.len = transmit.contents.len();
@@ -76,6 +80,10 @@ impl AsyncUdpSocket for HostHandle {
             // Buffer
             buf[..transmit.contents.len()].copy_from_slice(&transmit.contents);
         }
+
+        self.host
+            .highest_received_packet_number
+            .fetch_max(highest_received, Ordering::SeqCst);
 
         if received == 0 {
             inbound.register_waker(cx.waker().clone());
