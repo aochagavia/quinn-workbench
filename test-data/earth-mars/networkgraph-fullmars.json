@@ -3,25 +3,26 @@
   "nodes": [
     {
       "id": "GND",
+      "type": "host",
       "interfaces": [
         {
           "addresses": [
             {
-              "address": "192.168.40.1"
+              "address": "192.168.40.1/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.43.0/24",
+              "next": "192.168.40.2",
+              "cost": 100
+            },
+            {
+              "destination": "192.168.54.0/24",
+              "next": "192.168.40.2",
+              "cost": 100
             }
           ]
-        }
-      ],
-      "routes": [
-        {
-          "destination": "192.168.43.0/24",
-          "next": "192.168.40.2",
-          "cost": 1
-        },
-        {
-          "destination": "192.168.54.0/24",
-          "next": "192.168.40.2",
-          "cost": 1
         }
       ]
     },
@@ -32,67 +33,91 @@
         {
           "addresses": [
             {
-              "address": "192.168.40.2"
+              "address": "192.168.40.2/24"
+            }
+          ],
+          "routes": []
+        },
+        {
+          "addresses": [
+            {
+              "address": "192.168.41.1/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.54.0/24",
+              "next": "192.168.41.2",
+              "cost": 100
+            },
+            {
+              "destination": "192.168.43.0/24",
+              "next": "192.168.41.2",
+              "cost": 100
             }
           ]
         },
         {
           "addresses": [
             {
-              "address": "192.168.41.1"
+              "address": "192.168.44.1/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.43.0/24",
+              "next": "192.168.44.2",
+              "cost": 100
             },
             {
-              "address": "192.168.44.1"
+              "destination": "192.168.54.0/24",
+              "next": "192.168.44.2",
+              "cost": 100
             },
             {
-              "address": "192.168.46.1"
-            },
-            {
-              "address": "192.168.48.1"
+              "destination": "192.168.43.0/24",
+              "next": "192.168.44.2",
+              "cost": 100
             }
           ]
-        }
-      ],
-      "routes": [
-        {
-          "destination": "192.168.43.0/24",
-          "next": "192.168.41.2",
-          "cost": 1
         },
         {
-          "destination": "192.168.54.0/24",
-          "next": "192.168.41.2",
-          "cost": 1
+          "addresses": [
+            {
+              "address": "192.168.46.1/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.43.0/24",
+              "next": "192.168.46.2",
+              "cost": 100
+            },
+            {
+              "destination": "192.168.54.0/24",
+              "next": "192.168.46.2",
+              "cost": 100
+            }
+          ]
         },
         {
-          "destination": "192.168.43.0/24",
-          "next": "192.168.44.2",
-          "cost": 1
-        },
-        {
-          "destination": "192.168.54.0/24",
-          "next": "192.168.44.2",
-          "cost": 1
-        },
-        {
-          "destination": "192.168.43.0/24",
-          "next": "192.168.46.2",
-          "cost": 1
-        },
-        {
-          "destination": "192.168.54.0/24",
-          "next": "192.168.46.2",
-          "cost": 1
-        },
-        {
-          "destination": "192.168.43.0/24",
-          "next": "192.168.48.2",
-          "cost": 1
-        },
-        {
-          "destination": "192.168.54.0/24",
-          "next": "192.168.48.2",
-          "cost": 1
+          "addresses": [
+            {
+              "address": "192.168.48.1/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.43.0/24",
+              "next": "192.168.48.2",
+              "cost": 100
+            },
+            {
+              "destination": "192.168.54.0/24",
+              "next": "192.168.48.2",
+              "cost": 100
+            }
+          ]
         }
       ]
     },
@@ -103,40 +128,44 @@
         {
           "addresses": [
             {
-              "address": "192.168.41.2"
+              "address": "192.168.41.2/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.40.0/24",
+              "next": "192.168.41.1",
+              "cost": 100
             }
           ]
         },
         {
           "addresses": [
             {
-              "address": "192.168.42.1"
+              "address": "192.168.42.1/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.43.0/24",
+              "next": "192.168.42.2",
+              "cost": 100
             }
           ]
         },
         {
           "addresses": [
             {
-              "address": "192.168.50.1"
+              "address": "192.168.50.1/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.54.0/24",
+              "next": "192.168.50.2",
+              "cost": 100
             }
           ]
-        }
-      ],
-      "routes": [
-        {
-          "destination": "192.168.43.0/24",
-          "next": "192.168.42.2",
-          "cost": 1
-        },
-        {
-          "destination": "192.168.54.0/24",
-          "next": "192.168.50.2",
-          "cost": 1
-        },
-        {
-          "destination": "192.168.40.0/24",
-          "next": "192.168.41.1",
-          "cost": 1
         }
       ]
     },
@@ -147,40 +176,44 @@
         {
           "addresses": [
             {
-              "address": "192.168.44.2"
+              "address": "192.168.44.2/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.40.0/24",
+              "next": "192.168.44.1",
+              "cost": 100
             }
           ]
         },
         {
           "addresses": [
             {
-              "address": "192.168.45.1"
+              "address": "192.168.45.1/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.43.0/24",
+              "next": "192.168.45.2",
+              "cost": 100
             }
           ]
         },
         {
           "addresses": [
             {
-              "address": "192.168.51.1"
+              "address": "192.168.51.1/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.54.0/24",
+              "next": "192.168.51.2",
+              "cost": 100
             }
           ]
-        }
-      ],
-      "routes": [
-        {
-          "destination": "192.168.43.0/24",
-          "next": "192.168.45.2",
-          "cost": 1
-        },
-        {
-          "destination": "192.168.54.0/24",
-          "next": "192.168.51.2",
-          "cost": 1
-        },
-        {
-          "destination": "192.168.40.0/24",
-          "next": "192.168.44.1",
-          "cost": 1
         }
       ]
     },
@@ -191,40 +224,44 @@
         {
           "addresses": [
             {
-              "address": "192.168.46.2"
+              "address": "192.168.46.2/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.40.0/24",
+              "next": "192.168.46.1",
+              "cost": 100
             }
           ]
         },
         {
           "addresses": [
             {
-              "address": "192.168.47.1"
+              "address": "192.168.47.1/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.43.0/24",
+              "next": "192.168.47.2",
+              "cost": 100
             }
           ]
         },
         {
           "addresses": [
             {
-              "address": "192.168.52.1"
+              "address": "192.168.52.1/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.54.0/24",
+              "next": "192.168.52.2",
+              "cost": 100
             }
           ]
-        }
-      ],
-      "routes": [
-        {
-          "destination": "192.168.43.0/24",
-          "next": "192.168.47.2",
-          "cost": 1
-        },
-        {
-          "destination": "192.168.54.0/24",
-          "next": "192.168.52.2",
-          "cost": 1
-        },
-        {
-          "destination": "192.168.40.0/24",
-          "next": "192.168.46.1",
-          "cost": 1
         }
       ]
     },
@@ -235,40 +272,44 @@
         {
           "addresses": [
             {
-              "address": "192.168.48.2"
+              "address": "192.168.48.2/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.40.0/24",
+              "next": "192.168.48.1",
+              "cost": 100
             }
           ]
         },
         {
           "addresses": [
             {
-              "address": "192.168.49.1"
+              "address": "192.168.49.1/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.43.0/24",
+              "next": "192.168.49.2",
+              "cost": 100
             }
           ]
         },
         {
           "addresses": [
             {
-              "address": "192.168.53.1"
+              "address": "192.168.53.1/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.54.0/24",
+              "next": "192.168.53.2",
+              "cost": 100
             }
           ]
-        }
-      ],
-      "routes": [
-        {
-          "destination": "192.168.43.0/24",
-          "next": "192.168.49.2",
-          "cost": 1
-        },
-        {
-          "destination": "192.168.54.0/24",
-          "next": "192.168.53.2",
-          "cost": 1
-        },
-        {
-          "destination": "192.168.40.0/24",
-          "next": "192.168.48.1",
-          "cost": 1
         }
       ]
     },
@@ -279,117 +320,156 @@
         {
           "addresses": [
             {
-              "address": "192.168.42.2"
-            },
+              "address": "192.168.42.2/24"
+            }
+          ],
+          "routes": [
             {
-              "address": "192.168.45.2"
-            },
-            {
-              "address": "192.168.47.2"
-            },
-            {
-              "address": "192.168.49.2"
+              "destination": "192.168.40.0/24",
+              "next": "192.168.42.1",
+              "cost": 100
             }
           ]
         },
         {
           "addresses": [
             {
-              "address": "192.168.43.1"
+              "address": "192.168.45.2/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.40.0/24",
+              "next": "192.168.45.1",
+              "cost": 100
             }
           ]
-        }
-      ],
-      "routes": [
-        {
-          "destination": "192.168.40.0/24",
-          "next": "192.168.42.1",
-          "cost": 1
         },
         {
-          "destination": "192.168.40.0/24",
-          "next": "192.168.45.1",
-          "cost": 1
+          "addresses": [
+            {
+              "address": "192.168.47.2/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.40.0/24",
+              "next": "192.168.47.1",
+              "cost": 100
+            }
+          ]
         },
         {
-          "destination": "192.168.40.0/24",
-          "next": "192.168.47.1",
-          "cost": 1
+          "addresses": [
+            {
+              "address": "192.168.49.2/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.40.0/24",
+              "next": "192.168.49.1",
+              "cost": 100
+            }
+          ]
         },
         {
-          "destination": "192.168.40.0/24",
-          "next": "192.168.49.1",
-          "cost": 1
+          "addresses": [
+            {
+              "address": "192.168.43.1/24"
+            }
+          ],
+          "routes": []
         }
       ]
     },
     {
-      "type": "router",
+      "type": "host",
       "id": "MSL",
       "interfaces": [
         {
           "addresses": [
             {
-              "address": "192.168.50.2"
-            },
+              "address": "192.168.50.2/24"
+            }
+          ],
+          "routes": [
             {
-              "address": "192.168.51.2"
-            },
-            {
-              "address": "192.168.52.2"
-            },
-            {
-              "address": "192.168.53.2"
+              "destination": "192.168.40.0/24",
+              "next": "192.168.50.1",
+              "cost": 100
             }
           ]
         },
         {
           "addresses": [
             {
-              "address": "192.168.54.1"
+              "address": "192.168.51.2/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.40.0/24",
+              "next": "192.168.51.1",
+              "cost": 100
             }
           ]
-        }
-      ],
-      "routes": [
-        {
-          "destination": "192.168.40.0/24",
-          "next": "192.168.50.1",
-          "cost": 1
         },
         {
-          "destination": "192.168.40.0/24",
-          "next": "192.168.51.1",
-          "cost": 1
+          "addresses": [
+            {
+              "address": "192.168.52.2/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.40.0/24",
+              "next": "192.168.52.1",
+              "cost": 100
+            }
+          ]
         },
         {
-          "destination": "192.168.40.0/24",
-          "next": "192.168.52.1",
-          "cost": 1
+          "addresses": [
+            {
+              "address": "192.168.53.2/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.40.0/24",
+              "next": "192.168.53.1",
+              "cost": 100
+            }
+          ]
         },
         {
-          "destination": "192.168.40.0/24",
-          "next": "192.168.53.1",
-          "cost": 1
+          "addresses": [
+            {
+              "address": "192.168.54.1/24"
+            }
+          ],
+          "routes": []
         }
       ]
     },
     {
       "id": "ING",
+      "type": "host",
       "interfaces": [
         {
           "addresses": [
             {
-              "address": "192.168.43.2"
+              "address": "192.168.43.2/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.40.0/24",
+              "next": "192.168.43.1",
+              "cost": 100
             }
           ]
-        }
-      ],
-      "routes": [
-        {
-          "destination": "192.168.40.0/24",
-          "next": "192.168.43.1",
-          "cost": 1
         }
       ]
     }
@@ -399,197 +479,197 @@
       "id": "GND-DSN",
       "source": "192.168.40.1",
       "target": "192.168.40.2",
-      "delay_ms": 10,
-      "bandwidth_bps": 8000000000
+      "delay_ms": 100,
+      "bandwidth_bps": 1000000000
     },
     {
       "id": "DSN-GND",
       "source": "192.168.40.2",
       "target": "192.168.40.1",
-      "delay_ms": 10,
-      "bandwidth_bps": 8000000000
+      "delay_ms": 100,
+      "bandwidth_bps": 1000000000
     },
     {
       "id": "DSN-MRO",
       "source": "192.168.41.1",
       "target": "192.168.41.2",
       "delay_ms": 900000,
-      "bandwidth_bps": 8000
+      "bandwidth_bps": 1000
     },
     {
       "id": "MRO-DSN",
       "source": "192.168.41.2",
       "target": "192.168.41.1",
       "delay_ms": 900000,
-      "bandwidth_bps": 8000000
+      "bandwidth_bps": 1000000
     },
     {
       "id": "DSN-TGO",
       "source": "192.168.44.1",
       "target": "192.168.44.2",
       "delay_ms": 900000,
-      "bandwidth_bps": 8000
+      "bandwidth_bps": 1000
     },
     {
       "id": "TGO-DSN",
       "source": "192.168.44.2",
       "target": "192.168.44.1",
       "delay_ms": 900000,
-      "bandwidth_bps": 8000000
+      "bandwidth_bps": 1000000
     },
     {
       "id": "DSN-MVN",
       "source": "192.168.46.1",
       "target": "192.168.46.2",
       "delay_ms": 900000,
-      "bandwidth_bps": 8000
+      "bandwidth_bps": 1000
     },
     {
-      "id": "MRO-MVN",
+      "id": "MVN-DSN",
       "source": "192.168.46.2",
       "target": "192.168.46.1",
       "delay_ms": 900000,
-      "bandwidth_bps": 8000000
+      "bandwidth_bps": 1000000
     },
     {
       "id": "DSN-ODY",
       "source": "192.168.48.1",
       "target": "192.168.48.2",
       "delay_ms": 900000,
-      "bandwidth_bps": 8000
+      "bandwidth_bps": 1000
     },
     {
       "id": "ODY-DSN",
       "source": "192.168.48.2",
       "target": "192.168.48.1",
       "delay_ms": 900000,
-      "bandwidth_bps": 8000000
+      "bandwidth_bps": 1000000
     },
     {
       "id": "MRO-M20",
       "source": "192.168.42.1",
       "target": "192.168.42.2",
       "delay_ms": 1000,
-      "bandwidth_bps": 80000000
+      "bandwidth_bps": 10000000
     },
     {
       "id": "M20-MRO",
       "source": "192.168.42.2",
       "target": "192.168.42.1",
       "delay_ms": 1000,
-      "bandwidth_bps": 8000000
+      "bandwidth_bps": 1000000
     },
     {
       "id": "TGO-M20",
       "source": "192.168.45.1",
       "target": "192.168.45.2",
       "delay_ms": 1000,
-      "bandwidth_bps": 80000000
+      "bandwidth_bps": 10000000
     },
     {
       "id": "M20-TGO",
       "source": "192.168.45.2",
       "target": "192.168.45.1",
       "delay_ms": 1000,
-      "bandwidth_bps": 8000000
+      "bandwidth_bps": 1000000
     },
     {
       "id": "MVN-M20",
       "source": "192.168.47.1",
       "target": "192.168.47.2",
       "delay_ms": 1000,
-      "bandwidth_bps": 80000000
+      "bandwidth_bps": 10000000
     },
     {
       "id": "M20-MVN",
       "source": "192.168.47.2",
       "target": "192.168.47.1",
       "delay_ms": 1000,
-      "bandwidth_bps": 8000000
+      "bandwidth_bps": 1000000
     },
     {
       "id": "ODY-M20",
       "source": "192.168.49.1",
       "target": "192.168.49.2",
       "delay_ms": 1000,
-      "bandwidth_bps": 80000000
+      "bandwidth_bps": 10000000
     },
     {
       "id": "M20-ODY",
       "source": "192.168.49.2",
       "target": "192.168.49.1",
       "delay_ms": 1000,
-      "bandwidth_bps": 8000000
+      "bandwidth_bps": 1000000
     },
     {
       "id": "MRO-MSL",
       "source": "192.168.50.1",
       "target": "192.168.50.2",
       "delay_ms": 1000,
-      "bandwidth_bps": 80000000
+      "bandwidth_bps": 10000000
     },
     {
       "id": "MSL-MRO",
       "source": "192.168.50.2",
       "target": "192.168.50.1",
       "delay_ms": 1000,
-      "bandwidth_bps": 8000000
+      "bandwidth_bps": 1000000
     },
     {
       "id": "TGO-MSL",
       "source": "192.168.51.1",
       "target": "192.168.51.2",
       "delay_ms": 1000,
-      "bandwidth_bps": 80000000
+      "bandwidth_bps": 10000000
     },
     {
       "id": "MSL-TGO",
       "source": "192.168.51.2",
       "target": "192.168.51.1",
       "delay_ms": 1000,
-      "bandwidth_bps": 8000000
+      "bandwidth_bps": 1000000
     },
     {
       "id": "MVN-MSL",
       "source": "192.168.52.1",
       "target": "192.168.52.2",
       "delay_ms": 1000,
-      "bandwidth_bps": 80000000
+      "bandwidth_bps": 10000000
     },
     {
       "id": "MSL-MVN",
       "source": "192.168.52.2",
       "target": "192.168.52.1",
       "delay_ms": 1000,
-      "bandwidth_bps": 8000000
+      "bandwidth_bps": 1000000
     },
     {
       "id": "ODY-MSL",
       "source": "192.168.53.1",
       "target": "192.168.53.2",
       "delay_ms": 1000,
-      "bandwidth_bps": 80000000
+      "bandwidth_bps": 10000000
     },
     {
       "id": "MSL-ODY",
       "source": "192.168.53.2",
       "target": "192.168.53.1",
       "delay_ms": 1000,
-      "bandwidth_bps": 8000000
+      "bandwidth_bps": 1000000
     },
     {
       "id": "M20-ING",
       "source": "192.168.43.1",
       "target": "192.168.43.2",
-      "delay_ms": 10,
-      "bandwidth_bps": 800000000
+      "delay_ms": 100,
+      "bandwidth_bps": 100000000
     },
     {
       "id": "ING-M20",
       "source": "192.168.43.2",
       "target": "192.168.43.1",
-      "delay_ms": 10,
-      "bandwidth_bps": 800000000
+      "delay_ms": 100,
+      "bandwidth_bps": 100000000
     }
   ]
 }
