@@ -244,7 +244,7 @@ async fn run(
     }
 
     println!(
-        "{:.2}s Done sending {request_number} requests",
+        "{:.2}s Done sending {request_number} requests and receiving their responses",
         start.elapsed().as_secs_f64()
     );
 
