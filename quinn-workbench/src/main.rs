@@ -7,6 +7,7 @@ use clap::Parser;
 use config::cli::CliOpt;
 use config::quinn::QuinnJsonConfig;
 use fastrand::Rng;
+use in_memory_network::network::event::NetworkEvents;
 use in_memory_network::network::node::HostHandle;
 use in_memory_network::network::spec::NetworkSpec;
 use in_memory_network::network::InMemoryNetwork;
@@ -153,25 +154,35 @@ async fn run(
 
     let start = Instant::now();
 
+    let network_spec: NetworkSpec = config.network_graph.into();
+
     // Network check
     let network_check_pcap_exporter = Arc::new(PcapExporter::new());
-    let network = InMemoryNetwork::initialize(
-        config.network_graph.clone().into(),
+    let network_events = NetworkEvents::new(
         config
             .network_events
             .clone()
             .into_iter()
             .map(|e| e.into())
             .collect(),
+    );
+    let network = InMemoryNetwork::initialize(
+        network_spec.clone(),
+        network_events,
         Arc::new(SimulationStepTracer::new(
             network_check_pcap_exporter,
-            config.network_graph.clone().into(),
+            network_spec.clone(),
         )),
         Rng::with_seed(simulated_network_rng_seed),
         start,
     )?;
 
     println!("--- Network ---");
+    println!("* Initial link statuses (derived from events):");
+    for link_spec in &network_spec.links {
+        let status = network.get_link_status(&link_spec.id);
+        println!("  * {}: {}", link_spec.id, status);
+    }
     println!("* Running connectivity check...");
     let (arrived1, arrived2) = network.assert_connectivity_between_hosts().await?;
     println!(
@@ -185,18 +196,19 @@ async fn run(
     let start = Instant::now();
 
     // Network
-    let network_spec: NetworkSpec = config.network_graph.into();
     let tracer = Arc::new(SimulationStepTracer::new(
         pcap_exporter,
         network_spec.clone(),
     ));
     let network = InMemoryNetwork::initialize(
         network_spec,
-        config
-            .network_events
-            .into_iter()
-            .map(|e| e.into())
-            .collect(),
+        NetworkEvents::new(
+            config
+                .network_events
+                .into_iter()
+                .map(|e| e.into())
+                .collect(),
+        ),
         tracer.clone(),
         Rng::with_seed(simulated_network_rng_seed),
         start,

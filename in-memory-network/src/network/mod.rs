@@ -10,7 +10,8 @@ mod outbound_buffer;
 pub mod route;
 pub mod spec;
 
-use crate::network::event::{NetworkEvent, NetworkEventPayload, UpdateLinkStatus};
+use crate::network::event::{NetworkEventPayload, NetworkEvents, UpdateLinkStatus};
+use crate::network::link::LinkStatus;
 use crate::network::node::{Host, HostHandle, Node};
 use crate::network::outbound_buffer::OutboundBuffer;
 use crate::network::spec::{NetworkSpec, NodeKind};
@@ -60,7 +61,7 @@ impl InMemoryNetwork {
     /// Initializes a new [`InMemoryNetwork`] based on the provided spec
     pub fn initialize(
         network_spec: NetworkSpec,
-        mut events: Vec<NetworkEvent>,
+        events: NetworkEvents,
         tracer: Arc<SimulationStepTracer>,
         rng: Rng,
         start: Instant,
@@ -108,11 +109,16 @@ impl InMemoryNetwork {
 
         let mut links_by_addr = HashMap::new();
         let mut links_by_id = HashMap::new();
+        let mut link_initial_statuses = events.initial_link_statuses;
         for l in network_spec.links {
             let id = l.id.clone();
             let source = l.source;
             let target = l.target;
-            let l = Arc::new(Mutex::new(NetworkLink::new(l, tracer.clone())));
+            let status = link_initial_statuses
+                .remove(id.as_ref())
+                .unwrap_or(LinkStatus::Up);
+
+            let l = Arc::new(Mutex::new(NetworkLink::new(l, tracer.clone(), status)));
             let conflicting_link = links_by_addr.insert((source, target), l.clone());
             if let Some(conflicting_link) = conflicting_link {
                 bail!(
@@ -180,14 +186,13 @@ impl InMemoryNetwork {
 
         // Process events in the background
         let network_clone = network.clone();
-        events.sort_by_key(|e| e.relative_time);
         tokio::spawn(async move {
-            for event in events.into_iter() {
+            for event in events.sorted_events.into_iter() {
                 // Wait until next event should run
                 tokio::time::sleep_until(start + event.relative_time).await;
 
                 let NetworkEventPayload {
-                    id,
+                    link_id: id,
                     status,
                     bandwidth_bps,
                     delay,
@@ -241,6 +246,10 @@ impl InMemoryNetwork {
         });
 
         Ok(network)
+    }
+
+    pub fn get_link_status(&self, link_id: &str) -> &'static str {
+        self.links_by_id[link_id].lock().status_str()
     }
 
     /// Returns host A
