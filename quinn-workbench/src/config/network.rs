@@ -169,7 +169,7 @@ impl From<NetworkEventJson> for NetworkEvent {
         NetworkEvent {
             relative_time: Duration::from_millis(json.relative_time_ms),
             payload: NetworkEventPayload {
-                id: json.link.id,
+                link_id: json.link.id,
                 status: json.link.status.map(|s| match s {
                     NetworkLinkStatusJson::Up => UpdateLinkStatus::Up,
                     NetworkLinkStatusJson::Down => UpdateLinkStatus::Down,

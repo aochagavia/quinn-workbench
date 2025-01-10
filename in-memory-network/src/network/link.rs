@@ -39,6 +39,14 @@ pub(crate) enum LinkStatus {
 }
 
 impl LinkStatus {
+    pub(crate) fn new_down() -> Self {
+        let (up_tx, up_rx) = tokio::sync::oneshot::channel();
+        LinkStatus::Down {
+            up_tx,
+            up_rx: up_rx.shared(),
+        }
+    }
+
     fn is_down(&self) -> bool {
         match self {
             LinkStatus::Up => false,
@@ -55,10 +63,14 @@ impl LinkStatus {
 }
 
 impl NetworkLink {
-    pub(crate) fn new(l: NetworkLinkSpec, tracer: Arc<SimulationStepTracer>) -> Self {
+    pub(crate) fn new(
+        l: NetworkLinkSpec,
+        tracer: Arc<SimulationStepTracer>,
+        status: LinkStatus,
+    ) -> Self {
         Self {
             id: l.id,
-            status: LinkStatus::Up,
+            status,
             tracer,
             target: l.target,
             queue: InboundQueue::new(),
@@ -73,6 +85,13 @@ impl NetworkLink {
         }
     }
 
+    pub(crate) fn status_str(&self) -> &'static str {
+        match self.status {
+            LinkStatus::Up => "UP",
+            LinkStatus::Down { .. } => "DOWN",
+        }
+    }
+
     pub(crate) fn update_status(&mut self, update: UpdateLinkStatus) {
         let status = mem::replace(&mut self.status, LinkStatus::Up);
         match (status, update) {
@@ -84,11 +103,7 @@ impl NetworkLink {
 
             (LinkStatus::Up, UpdateLinkStatus::Down) => {
                 // Set status to down
-                let (up_tx, up_rx) = tokio::sync::oneshot::channel();
-                self.status = LinkStatus::Down {
-                    up_tx,
-                    up_rx: up_rx.shared(),
-                };
+                self.status = LinkStatus::new_down();
 
                 // Nothing else to do here, because:
                 // 1. already sent packets will continue traveling to their destination
