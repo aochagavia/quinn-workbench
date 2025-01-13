@@ -9,7 +9,8 @@ pub struct NetworkStats {
 pub struct NodeStats {
     pub sent: PacketStats,
     pub received: PacketStats,
-    pub dropped: PacketStats,
+    pub dropped_injected: PacketStats,
+    pub dropped_buffer_full: PacketStats,
     pub duplicates: PacketStats,
     pub received_out_of_order: PacketStats,
     pub congestion_experienced: PacketStats,

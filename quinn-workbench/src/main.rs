@@ -305,7 +305,8 @@ async fn run(
         );
         println!(
             "    | {} packets dropped in transit ({} bytes)",
-            stats.dropped.packets, stats.dropped.bytes
+            stats.dropped_injected.packets + stats.dropped_buffer_full.packets,
+            stats.dropped_injected.bytes + stats.dropped_buffer_full.bytes
         );
         println!(
             "  * Received packets: {} ({} bytes)",
@@ -321,7 +322,10 @@ async fn run(
     let mut buffer_usage: Vec<_> = stats.by_node.iter().collect();
     buffer_usage.sort_unstable_by_key(|tup| tup.1.max_buffer_usage);
     for (node_id, stats) in buffer_usage.into_iter().rev() {
-        println!("* {node_id}: {} bytes", stats.max_buffer_usage);
+        println!(
+            "* {node_id}: {} bytes ({} packets dropped due to buffer being full)",
+            stats.max_buffer_usage, stats.dropped_buffer_full.packets
+        );
     }
 
     Ok(())

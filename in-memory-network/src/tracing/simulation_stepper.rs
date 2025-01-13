@@ -91,7 +91,8 @@ impl SimulationStepper {
                         received: v.received_packets,
                         received_out_of_order: v.reordered_packets_received,
                         duplicates: v.duplicated_packets,
-                        dropped: v.dropped_packets,
+                        dropped_injected: v.dropped_packets_injected,
+                        dropped_buffer_full: v.dropped_packets_buffer_full,
                         max_buffer_usage: v.max_buffer_usage,
                         congestion_experienced: v.ecn_packets,
                     },
@@ -160,7 +161,8 @@ struct ReplayedNode {
     reordered_packets_received: PacketStats,
     ecn_packets: PacketStats,
     duplicated_packets: PacketStats,
-    dropped_packets: PacketStats,
+    dropped_packets_injected: PacketStats,
+    dropped_packets_buffer_full: PacketStats,
     buffer_usage: usize,
     max_buffer_usage: usize,
 }
@@ -193,7 +195,12 @@ impl ReplayedNode {
 
     fn packet_dropped(&mut self, s: &PacketDropped) {
         let packet = self.remove_packet_from_buffer(s.packet_id);
-        self.dropped_packets.track_one(packet.size_bytes);
+        if s.injected {
+            self.dropped_packets_injected.track_one(packet.size_bytes);
+        } else {
+            self.dropped_packets_buffer_full
+                .track_one(packet.size_bytes);
+        }
     }
 
     fn packet_ecn(&mut self, s: &GenericPacketEvent) {
