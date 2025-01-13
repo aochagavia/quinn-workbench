@@ -10,6 +10,7 @@ use crate::tracing::simulation_stepper::SimulationStepper;
 use crate::tracing::stats::NetworkStats;
 use crate::InTransitData;
 use parking_lot::Mutex;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -19,6 +20,7 @@ pub struct SimulationStepTracer {
     pcap_exporter: Arc<PcapExporter>,
     recorded_steps: Mutex<Vec<SimulationStep>>,
     nodes: Vec<NetworkNodeSpec>,
+    already_warned_dropped_from_buffer: Mutex<HashSet<Arc<str>>>,
 }
 
 impl SimulationStepTracer {
@@ -28,6 +30,7 @@ impl SimulationStepTracer {
             pcap_exporter,
             recorded_steps: Default::default(),
             nodes: spec.nodes,
+            already_warned_dropped_from_buffer: Mutex::default(),
         }
     }
 
@@ -97,13 +100,19 @@ impl SimulationStepTracer {
             injected: false,
         }));
 
-        println!(
-            "{:.2}s WARN packet #{} dropped by node `{}` because the link `{}` was saturated and node buffer was full!",
-            self.simulation_start.elapsed().as_secs_f64(),
-            data.number,
-            current_node.id(),
-            link.id,
-        );
+        let first_dropped = self
+            .already_warned_dropped_from_buffer
+            .lock()
+            .insert(link.id.clone());
+        if first_dropped {
+            println!(
+                "{:.2}s WARN packet #{} dropped by node `{}` because the link `{}` was saturated and node buffer was full! (Note: further warnings for this link will be omitted to avoid cluttering the output)",
+                self.simulation_start.elapsed().as_secs_f64(),
+                data.number,
+                current_node.id(),
+                link.id,
+            );
+        }
     }
 
     pub fn track_injected_failures(
