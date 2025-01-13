@@ -1,4 +1,5 @@
 use crate::InTransitData;
+use anyhow::Context;
 use parking_lot::Mutex;
 use pcap_file::pcapng::blocks::enhanced_packet::{EnhancedPacketBlock, EnhancedPacketOption};
 use pcap_file::pcapng::blocks::interface_description::InterfaceDescriptionBlock;
@@ -10,8 +11,8 @@ use pnet_packet::ipv4::MutableIpv4Packet;
 use pnet_packet::udp::MutableUdpPacket;
 use pnet_packet::{ipv4, udp, PacketSize};
 use quinn::udp::EcnCodepoint;
+use std::io::{BufWriter, Write};
 use std::net::{IpAddr, SocketAddr};
-use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::time::Instant;
@@ -19,14 +20,14 @@ use tokio::time::Instant;
 pub struct PcapExporter {
     capture_start: Instant,
     total_tracked_packets: AtomicU64,
-    writer: Mutex<PcapNgWriter<Vec<u8>>>,
+    writer: Mutex<PcapNgWriter<BufWriter<Box<dyn Write + Send + Sync + 'static>>>>,
 }
 
 impl PcapExporter {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
+    pub fn new(writer: impl Write + Send + Sync + 'static) -> Self {
+        let writer: Box<dyn Write + Send + Sync + 'static> = Box::new(writer);
         let mut writer = PcapNgWriter::with_section_header(
-            Vec::new(),
+            BufWriter::new(writer),
             SectionHeaderBlock {
                 endianness: Endianness::Big,
                 major_version: 1,
@@ -52,12 +53,12 @@ impl PcapExporter {
         }
     }
 
-    pub fn save(&self, path: &Path) {
-        let dummy_writer = PcapNgWriter::new(Vec::new()).unwrap();
-        let mut writer = self.writer.lock();
-        let writer = std::mem::replace(&mut *writer, dummy_writer);
-        let bytes = writer.into_inner();
-        std::fs::write(path, bytes).unwrap();
+    pub fn flush(&self) -> anyhow::Result<()> {
+        self.writer
+            .lock()
+            .get_mut()
+            .flush()
+            .context("failed to flush pcap writer")
     }
 
     pub fn track_packet(

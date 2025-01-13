@@ -44,28 +44,26 @@ fn main() -> anyhow::Result<()> {
     let opt = CliOpt::parse();
     let simulation_config = load_simulation_config(&opt)?;
 
-    if opt.find_hangs {
-        find_hangs(opt)
-    } else {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .start_paused(true)
-            .build()
-            .expect("failed to initialize tokio");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .expect("failed to initialize tokio");
 
-        let start = Instant::now();
-        let pcap_exporter = Arc::new(PcapExporter::new());
-        let result = rt.block_on(run(&opt, simulation_config, pcap_exporter.clone()));
+    let start = Instant::now();
+    let pcap_file =
+        File::create("capture.pcap").context("failed to open capture.pcap for writing")?;
+    let pcap_exporter = Arc::new(PcapExporter::new(pcap_file));
+    let result = rt.block_on(run(&opt, simulation_config, pcap_exporter.clone()));
 
-        // Always save export, regardless of success / failure
-        pcap_exporter.save("capture.pcap".as_ref());
+    // Ensure the pcap export is written to disk
+    pcap_exporter.flush()?;
 
-        if result.is_err() {
-            eprintln!("Error after {:.2}s", start.elapsed().as_secs_f64());
-        }
-
-        result
+    if result.is_err() {
+        eprintln!("Error after {:.2}s", start.elapsed().as_secs_f64());
     }
+
+    result
 }
 
 fn load_simulation_config(cli: &CliOpt) -> anyhow::Result<SimulationConfig> {
@@ -86,49 +84,6 @@ fn load_json<T: DeserializeOwned>(path: &Path) -> anyhow::Result<T> {
     let parsed = serde_json::from_reader(file)
         .with_context(|| format!("error parsing JSON from `{}`", path.display()))?;
     Ok(parsed)
-}
-
-fn find_hangs(opt: CliOpt) -> anyhow::Result<()> {
-    let start = Instant::now();
-    let mut rng = Rng::new();
-    loop {
-        let mut opt = opt.clone();
-        opt.quinn_rng_seed = rng.u64(..);
-        opt.simulated_network_rng_seed = rng.u64(..);
-        let simulation_config = load_simulation_config(&opt)?;
-
-        println!("---\n---New run\n---");
-        let pcap_exporter = Arc::new(PcapExporter::new());
-
-        let pcap_exporter_clone = pcap_exporter.clone();
-        let thread = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .start_paused(true)
-                .build()
-                .expect("failed to initialize tokio");
-
-            rt.block_on(run(&opt, simulation_config, pcap_exporter))
-        });
-
-        std::thread::sleep(Duration::from_millis(200));
-        if !thread.is_finished() {
-            std::thread::sleep(Duration::from_millis(1500));
-            if !thread.is_finished() {
-                panic!("Got stuck");
-            }
-        }
-
-        if thread.join().unwrap().is_err() {
-            pcap_exporter_clone.save("capture.pcap".as_ref());
-            break Ok(());
-        }
-
-        if start.elapsed() > Duration::from_secs(60) {
-            println!("No hangs found after 60 seconds");
-            break Ok(());
-        }
-    }
 }
 
 async fn run(
@@ -157,7 +112,7 @@ async fn run(
     let network_spec: NetworkSpec = config.network_graph.into();
 
     // Network check
-    let network_check_pcap_exporter = Arc::new(PcapExporter::new());
+    let network_check_pcap_exporter = Arc::new(PcapExporter::new(std::io::empty()));
     let network_events = NetworkEvents::new(
         config
             .network_events
@@ -252,7 +207,9 @@ async fn run(
         tx.write_all(request.as_bytes()).await?;
         tx.finish()?;
 
-        rx.read_to_end(usize::MAX).await?;
+        rx.read_to_end(usize::MAX)
+            .await
+            .context("failed to read response from server")?;
     }
 
     println!(
