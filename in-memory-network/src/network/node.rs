@@ -79,7 +79,7 @@ impl Host {
         if node.interfaces[0].addresses.is_empty() {
             bail!("Host {} has an interface without any address", node.id);
         }
-        let node_address = node.interfaces[0].addresses[0];
+        let node_address = node.interfaces[0].addresses[0].as_ip_addr();
         Ok(Self {
             addr: SocketAddr::new(node_address, HOST_PORT),
             id: Arc::from(node.id.into_boxed_str()),

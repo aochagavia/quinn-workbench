@@ -36,7 +36,13 @@
               "address": "192.168.40.2/24"
             }
           ],
-          "routes": []
+          "routes": [
+            {
+              "destination": "192.168.40.0/24",
+              "next": "192.168.40.1",
+              "cost": 100
+            }
+          ]
         },
         {
           "addresses": [
@@ -379,12 +385,18 @@
               "address": "192.168.43.1/24"
             }
           ],
-          "routes": []
+          "routes": [
+            {
+              "destination": "192.168.43.2/24",
+              "next": "192.168.43.2",
+              "cost": 100
+            }
+          ]
         }
       ]
     },
     {
-      "type": "host",
+      "type": "router",
       "id": "MSL",
       "interfaces": [
         {

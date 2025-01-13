@@ -4,6 +4,7 @@
 
 pub mod event;
 pub(crate) mod inbound_queue;
+pub mod ip;
 pub mod link;
 pub mod node;
 mod outbound_buffer;
@@ -67,13 +68,12 @@ impl InMemoryNetwork {
         start: Instant,
     ) -> anyhow::Result<Arc<Self>> {
         let mut routes_by_addr = HashMap::new();
-        let routes = network_spec
-            .nodes
-            .iter()
-            .map(|n| (&n.interfaces, &n.routes));
-        for (interfaces, routes) in routes {
-            for &addr in interfaces.iter().flat_map(|i| &i.addresses) {
-                routes_by_addr.insert(addr, Arc::new(routes.clone()));
+        let all_node_interfaces = network_spec.nodes.iter().map(|n| &n.interfaces);
+        for single_node_interfaces in all_node_interfaces {
+            for interface in single_node_interfaces {
+                for addr in &interface.addresses {
+                    routes_by_addr.insert(addr.as_ip_addr(), Arc::new(interface.routes.clone()));
+                }
             }
         }
 
@@ -138,7 +138,16 @@ impl InMemoryNetwork {
 
         let mut routers_by_addr = HashMap::new();
         for r in routers {
-            let addresses: Vec<_> = r.interfaces.into_iter().flat_map(|i| i.addresses).collect();
+            let addresses: Vec<_> = r
+                .interfaces
+                .into_iter()
+                .flat_map(|i| {
+                    i.addresses
+                        .iter()
+                        .map(|a| a.as_ip_addr())
+                        .collect::<Vec<_>>()
+                })
+                .collect();
             if addresses.is_empty() {
                 bail!("found router with no addresses: {}", r.id);
             }

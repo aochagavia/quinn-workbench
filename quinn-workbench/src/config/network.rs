@@ -1,4 +1,5 @@
 use in_memory_network::network::event::{NetworkEvent, NetworkEventPayload, UpdateLinkStatus};
+use in_memory_network::network::ip::Ipv4Cidr;
 use in_memory_network::network::route::IpRange;
 use serde::Deserialize;
 use serde_with::{serde_as, DisplayFromStr};
@@ -18,7 +19,6 @@ struct NetworkNodeJson {
     #[serde(default = "default_network_node_kind")]
     kind: NetworkNodeKindJson,
     interfaces: Vec<NetworkInterfaceJson>,
-    routes: Vec<NetworkRouteJson>,
 }
 
 fn default_network_node_kind() -> NetworkNodeKindJson {
@@ -35,13 +35,14 @@ enum NetworkNodeKindJson {
 #[derive(Deserialize, Clone)]
 struct NetworkInterfaceJson {
     addresses: Vec<NetworkAddressJson>,
+    routes: Vec<NetworkRouteJson>,
 }
 
 #[serde_as]
 #[derive(Deserialize, Clone)]
 struct NetworkAddressJson {
     #[serde_as(as = "DisplayFromStr")]
-    address: IpAddr,
+    address: Ipv4Cidr,
 }
 
 #[serde_as]
@@ -109,14 +110,14 @@ impl From<NetworkSpecJson> for in_memory_network::network::spec::NetworkSpec {
                     .into_iter()
                     .map(|i| in_memory_network::network::spec::NetworkInterface {
                         addresses: i.addresses.into_iter().map(|a| a.address).collect(),
-                    })
-                    .collect(),
-                routes: n
-                    .routes
-                    .into_iter()
-                    .map(|r| in_memory_network::network::route::Route {
-                        destination: r.destination,
-                        next: r.next,
+                        routes: i
+                            .routes
+                            .into_iter()
+                            .map(|r| in_memory_network::network::route::Route {
+                                destination: r.destination,
+                                next: r.next,
+                            })
+                            .collect(),
                     })
                     .collect(),
             })
