@@ -29,6 +29,8 @@ pub enum SimulationStepKind {
     PacketCongestionEvent(GenericPacketEvent),
     /// The packet is being transferred over a link
     PacketInTransit(PacketInTransit),
+    /// The packet has been delivered to an application
+    PacketDeliveredToApplication(GenericPacketEvent),
 }
 
 #[serde_as]

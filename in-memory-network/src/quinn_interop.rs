@@ -60,12 +60,11 @@ impl AsyncUdpSocket for HostHandle {
 
         let out = meta.iter_mut().zip(bufs);
         for (in_transit, (meta, buf)) in inbound.receive(max_transmits).into_iter().zip(out) {
-            if in_transit.number < highest_received {
-                self.network
-                    .tracer
-                    .track_out_of_order_packet_received_by_host(&in_transit);
-            }
+            let out_of_order = in_transit.number < highest_received;
             highest_received = highest_received.max(in_transit.number);
+            self.network
+                .tracer
+                .track_read_by_host(host.id.clone(), &in_transit, out_of_order);
 
             received += 1;
             let transmit = in_transit.transmit;
