@@ -271,18 +271,10 @@ impl InMemoryNetwork {
         &self.host_b
     }
 
-    /// Returns a handle to host A
-    pub fn host_a_handle(self: &Arc<InMemoryNetwork>) -> HostHandle {
+    /// Returns a handle to the provided host
+    pub fn host_handle(self: &Arc<InMemoryNetwork>, host: Host) -> HostHandle {
         HostHandle {
-            host: self.host_a.clone(),
-            network: self.clone(),
-        }
-    }
-
-    /// Returns a handle to host B
-    pub fn host_b_handle(self: &Arc<InMemoryNetwork>) -> HostHandle {
-        HostHandle {
-            host: self.host_b.clone(),
+            host,
             network: self.clone(),
         }
     }
