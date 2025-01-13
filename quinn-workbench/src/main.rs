@@ -139,7 +139,9 @@ async fn run(
         println!("  * {}: {}", link_spec.id, status);
     }
     println!("* Running connectivity check...");
-    let (arrived1, arrived2) = network.assert_connectivity_between_hosts().await?;
+    let (arrived1, arrived2) = network
+        .assert_connectivity_between_hosts(options.server_ip_address, options.client_ip_address)
+        .await?;
     println!(
         "* Connectivity check passed (packets arrived after {} ms and {} ms)",
         arrived1.as_millis(),
@@ -177,7 +179,7 @@ async fn run(
 
     // Let a server listen in the background
     let mut quinn_rng = Rng::with_seed(quinn_rng_seed);
-    let server_host = network.host_b();
+    let server_host = network.host(options.server_ip_address);
     let server_addr = server_host.addr;
     let server = server_endpoint(
         cert.clone(),
@@ -190,7 +192,7 @@ async fn run(
 
     // Make repeated requests
     println!("--- Requests ---");
-    let client_host = network.host_a();
+    let client_host = network.host(options.client_ip_address);
     let client = client_endpoint(
         cert,
         network.host_handle(client_host.clone()),
@@ -251,8 +253,8 @@ async fn run(
     let stats = tracer.stats();
     for node in ["client", "server"] {
         let name = match node {
-            "server" => &network.host_b().id,
-            "client" => &network.host_a().id,
+            "server" => &server_host.id,
+            "client" => &client_host.id,
             _ => unreachable!(),
         };
         let stats = &stats.by_node[name];

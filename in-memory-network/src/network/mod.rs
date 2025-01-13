@@ -15,9 +15,10 @@ use crate::network::event::{NetworkEventPayload, NetworkEvents, UpdateLinkStatus
 use crate::network::link::LinkStatus;
 use crate::network::node::{Host, HostHandle, Node};
 use crate::network::outbound_buffer::OutboundBuffer;
+use crate::network::route::IpRange;
 use crate::network::spec::{NetworkSpec, NodeKind};
 use crate::tracing::tracer::SimulationStepTracer;
-use crate::{InTransitData, OwnedTransmit};
+use crate::{InTransitData, OwnedTransmit, HOST_PORT};
 use anyhow::bail;
 use fastrand::Rng;
 use link::NetworkLink;
@@ -41,8 +42,6 @@ pub struct PacketArrived {
 
 /// A network between two hosts, with multiple routers in between
 pub struct InMemoryNetwork {
-    pub(crate) host_a: Host,
-    pub(crate) host_b: Host,
     /// Map from socket addresses to the corresponding host object
     hosts_by_addr: HashMap<SocketAddr, Host>,
     /// Map from ip addresses to the corresponding router object
@@ -77,34 +76,28 @@ impl InMemoryNetwork {
             }
         }
 
-        let (mut hosts, routers): (Vec<_>, _) = network_spec
+        let (hosts, routers): (Vec<_>, _) = network_spec
             .nodes
             .into_iter()
             .partition(|n| n.kind == NodeKind::Host);
-        if hosts.is_empty() {
-            bail!("Expected exactly two hosts in network graph, found zero");
-        } else if hosts.len() != 2 {
-            let ids: Vec<_> = hosts.into_iter().map(|h| h.id).collect();
+        if hosts.len() < 2 {
             bail!(
-                "Expected exactly two hosts in network graph, found a different amount: {}",
-                ids.join(", ")
+                "Expected at least two hosts in network graph, found {}",
+                hosts.len()
             );
         }
 
-        let host_a = hosts.remove(0);
-        let host_a = Host::from_network_node(host_a)?;
-        let host_b = hosts.remove(0);
-        let host_b = Host::from_network_node(host_b)?;
-        let hosts_by_addr = [host_a.clone(), host_b.clone()]
-            .into_iter()
-            .map(|h| (h.addr, h))
-            .collect();
+        let mut hosts_by_addr = HashMap::new();
+        for host in hosts {
+            let h = Host::from_network_node(host)?;
+            let already_existing = hosts_by_addr.insert(h.addr, h);
 
-        if host_a.addr.ip() == host_b.addr.ip() {
+            if let Some(host) = already_existing {
             bail!(
-                "Expected hosts to have different ip addresses, found the same: {}",
-                host_a.addr.ip()
+                "Expected hosts to have unique ip addresses, but at least two hosts are using {}",
+                host.addr.ip()
             );
+            }
         }
 
         let mut links_by_addr = HashMap::new();
@@ -181,8 +174,6 @@ impl InMemoryNetwork {
         }
 
         let network = Arc::new(Self {
-            host_a,
-            host_b,
             hosts_by_addr,
             routers_by_addr: Arc::new(routers_by_addr),
             routes_by_addr: Arc::new(routes_by_addr),
@@ -261,16 +252,6 @@ impl InMemoryNetwork {
         self.links_by_id[link_id].lock().status_str()
     }
 
-    /// Returns host A
-    pub fn host_a(self: &InMemoryNetwork) -> &Host {
-        &self.host_a
-    }
-
-    /// Returns host B
-    pub fn host_b(self: &InMemoryNetwork) -> &Host {
-        &self.host_b
-    }
-
     /// Returns a handle to the provided host
     pub fn host_handle(self: &Arc<InMemoryNetwork>, host: Host) -> HostHandle {
         HostHandle {
@@ -280,24 +261,30 @@ impl InMemoryNetwork {
     }
 
     /// Returns the host bound to the provided address
-    pub(crate) fn host(&self, addr: SocketAddr) -> &Host {
+    pub fn host(self: &InMemoryNetwork, ip: IpAddr) -> &Host {
+        &self.hosts_by_addr[&SocketAddr::new(ip, HOST_PORT)]
+    }
+
+    /// Returns the host bound to the provided address
+    pub(crate) fn host_internal(&self, addr: SocketAddr) -> &Host {
         &self.hosts_by_addr[&addr]
     }
 
     pub async fn assert_connectivity_between_hosts(
         self: &Arc<Self>,
+        host_a_addr: IpAddr,
+        host_b_addr: IpAddr,
     ) -> anyhow::Result<(Duration, Duration)> {
-        let peers = [
-            (&self.host_a, self.host_b.addr),
-            (&self.host_b, self.host_a.addr),
-        ];
+        let host_a = self.host(host_a_addr);
+        let host_b = self.host(host_b_addr);
+        let peers = [(host_a, host_b), (host_b, host_a)];
 
         // Send a packet both ways
-        for (source, target_addr) in peers {
+        for (source, target) in peers {
             let data = self.in_transit_data(
                 source.clone(),
                 OwnedTransmit {
-                    destination: target_addr,
+                    destination: target.addr,
                     ecn: None,
                     contents: vec![42],
                     segment_size: None,
@@ -312,9 +299,9 @@ impl InMemoryNetwork {
         tokio::time::sleep(Duration::from_secs(3600 * 24 * days)).await;
 
         // Ensure the packets arrived at each host
-        let a_to_b = self.host_b.inbound.lock().receive(1);
+        let a_to_b = host_b.inbound.lock().receive(1);
         let a_to_b_failed = a_to_b.is_empty();
-        let b_to_a = self.host_a.inbound.lock().receive(1);
+        let b_to_a = host_a.inbound.lock().receive(1);
         let b_to_a_failed = b_to_a.is_empty();
 
         if a_to_b_failed || b_to_a_failed {
@@ -326,10 +313,10 @@ impl InMemoryNetwork {
 
         Ok((
             stepper
-                .get_packet_arrived_at(a_to_b[0].id, &self.host_b.id)
+                .get_packet_arrived_at(a_to_b[0].id, &host_b.id)
                 .unwrap(),
             stepper
-                .get_packet_arrived_at(b_to_a[0].id, &self.host_a.id)
+                .get_packet_arrived_at(b_to_a[0].id, &host_a.id)
                 .unwrap(),
         ))
     }
