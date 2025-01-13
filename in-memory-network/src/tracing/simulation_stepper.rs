@@ -74,6 +74,10 @@ impl SimulationStepper {
                     self.node(&s.node_id).packet_ecn(s);
                 }
 
+                SimulationStepKind::PacketDeliveredToApplication(s) => {
+                    self.node(&s.node_id).packet_delivered(s.packet_id);
+                }
+
                 // TODO: do something with the steps below, so we can check that each packet's delay
                 // is respected (i.e. the time between PacketInTransit and PacketInNode matches the
                 // link's delay + extra delay).
@@ -191,6 +195,10 @@ impl ReplayedNode {
     fn packet_sent(&mut self, packet_id: Uuid) {
         let packet = self.remove_packet_from_buffer(packet_id);
         self.sent_packets.track_one(packet.size_bytes);
+    }
+
+    fn packet_delivered(&mut self, packet_id: Uuid) {
+        self.remove_packet_from_buffer(packet_id);
     }
 
     fn packet_dropped(&mut self, s: &PacketDropped) {

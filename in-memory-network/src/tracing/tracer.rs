@@ -166,12 +166,23 @@ impl SimulationStepTracer {
         }
     }
 
-    pub fn track_out_of_order_packet_received_by_host(&self, data: &InTransitData) {
-        println!(
-            "{:.2}s WARN Received reordered packet (#{})",
-            self.simulation_start.elapsed().as_secs_f64(),
-            data.number
-        );
+    pub fn track_read_by_host(&self, host_id: Arc<str>, data: &InTransitData, out_of_order: bool) {
+        if out_of_order {
+            println!(
+                "{:.2}s WARN Received reordered packet (#{})",
+                self.simulation_start.elapsed().as_secs_f64(),
+                data.number
+            );
+        }
+
+        self.record(SimulationStepKind::PacketDeliveredToApplication(
+            GenericPacketEvent {
+                packet_id: data.id,
+                packet_number: data.number,
+                packet_size_bytes: data.transmit.contents.len(),
+                node_id: host_id.clone(),
+            },
+        ));
     }
 
     pub fn track_sent_in_pcap(&self, data: &InTransitData, current_node: &Node) {
