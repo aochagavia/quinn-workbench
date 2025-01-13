@@ -24,21 +24,27 @@ pub struct IpRange {
     pub end_inclusive: IpAddr,
 }
 
+impl IpRange {
+    pub fn from_cidr(addr: Ipv4Cidr) -> Self {
+        let base_ip_bits = addr.address.to_bits();
+        let mask: u32 = u32::MAX << (32 - addr.network_prefix);
+        let start = Ipv4Addr::from_bits(base_ip_bits & mask);
+        let end_inclusive = Ipv4Addr::from_bits(base_ip_bits | (!mask));
+
+        Self {
+            start: IpAddr::V4(start),
+            end_inclusive: IpAddr::V4(end_inclusive),
+        }
+    }
+}
+
 impl FromStr for IpRange {
     type Err = anyhow::Error;
 
     // Parse ranges in CIDR syntax (e.g. 10.0.0.0/24)
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let addr = Ipv4Cidr::from_str(s)?;
-        let base_ip_bits = addr.address.to_bits();
-        let mask: u32 = u32::MAX << (32 - addr.network_prefix);
-        let start = Ipv4Addr::from_bits(base_ip_bits & mask);
-        let end_inclusive = Ipv4Addr::from_bits(base_ip_bits | (!mask));
-
-        Ok(Self {
-            start: IpAddr::V4(start),
-            end_inclusive: IpAddr::V4(end_inclusive),
-        })
+        Ok(Self::from_cidr(addr))
     }
 }
 

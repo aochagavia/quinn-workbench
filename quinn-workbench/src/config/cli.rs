@@ -1,8 +1,17 @@
 use clap::Parser;
+use std::net::IpAddr;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug, Clone)]
 pub struct CliOpt {
+    /// The IP address of the node used as a client
+    #[arg(long)]
+    pub client_ip_address: IpAddr,
+
+    /// The IP address of the node used as a server
+    #[arg(long)]
+    pub server_ip_address: IpAddr,
+
     /// The amount of times the request should be repeated
     #[arg(long, default_value_t = 10)]
     pub repeat: u32,
