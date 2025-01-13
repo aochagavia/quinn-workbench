@@ -1,3 +1,4 @@
+use crate::network::ip::Ipv4Cidr;
 use crate::network::route::Route;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -14,7 +15,6 @@ pub struct NetworkNodeSpec {
     pub id: String,
     pub kind: NodeKind,
     pub interfaces: Vec<NetworkInterface>,
-    pub routes: Vec<Route>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -25,7 +25,8 @@ pub enum NodeKind {
 
 #[derive(Clone)]
 pub struct NetworkInterface {
-    pub addresses: Vec<IpAddr>,
+    pub addresses: Vec<Ipv4Cidr>,
+    pub routes: Vec<Route>,
 }
 
 #[derive(Clone)]

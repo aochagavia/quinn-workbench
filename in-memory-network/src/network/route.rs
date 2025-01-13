@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context};
+use crate::network::ip::Ipv4Cidr;
 use std::net::{IpAddr, Ipv4Addr};
 use std::str::FromStr;
 
@@ -29,36 +29,9 @@ impl FromStr for IpRange {
 
     // Parse ranges in CIDR syntax (e.g. 10.0.0.0/24)
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut parts = s.split('/');
-        let base_ip: IpAddr = parts
-            .next()
-            .ok_or(anyhow!("empty string"))?
-            .parse()
-            .context("invalid ip address in ip range")?;
-
-        let IpAddr::V4(base_ip) = base_ip else {
-            bail!("only IPv4 supported at the moment");
-        };
-
-        // A missing network prefix is interpreted as /32 (i.e. singleton ip range)
-        let network_prefix: u8 = parts
-            .next()
-            .unwrap_or("32")
-            .parse()
-            .context("the provided network prefix is not a valid unsigned integer")?;
-        if network_prefix == 0 {
-            bail!("network prefix cannot be 0");
-        }
-        if network_prefix > 32 {
-            bail!("network prefix cannot be higher than 32");
-        }
-
-        if parts.next().is_some() {
-            bail!("ip range contains trailing characters");
-        }
-
-        let base_ip_bits = base_ip.to_bits();
-        let mask: u32 = u32::MAX << (32 - network_prefix);
+        let addr = Ipv4Cidr::from_str(s)?;
+        let base_ip_bits = addr.address.to_bits();
+        let mask: u32 = u32::MAX << (32 - addr.network_prefix);
         let start = Ipv4Addr::from_bits(base_ip_bits & mask);
         let end_inclusive = Ipv4Addr::from_bits(base_ip_bits | (!mask));
 
