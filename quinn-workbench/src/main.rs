@@ -177,12 +177,12 @@ async fn run(
 
     // Let a server listen in the background
     let mut quinn_rng = Rng::with_seed(quinn_rng_seed);
-    let server_host = network.host_a_handle();
-    let server_addr = server_host.addr();
+    let server_host = network.host_b();
+    let server_addr = server_host.addr;
     let server = server_endpoint(
         cert.clone(),
         key.into(),
-        server_host,
+        network.host_handle(server_host.clone()),
         &config.quinn,
         &mut quinn_rng,
     )?;
@@ -190,7 +190,13 @@ async fn run(
 
     // Make repeated requests
     println!("--- Requests ---");
-    let client = client_endpoint(cert, network.host_b_handle(), &config.quinn, &mut quinn_rng)?;
+    let client_host = network.host_a();
+    let client = client_endpoint(
+        cert,
+        network.host_handle(client_host.clone()),
+        &config.quinn,
+        &mut quinn_rng,
+    )?;
     println!("{:.2}s CONNECT", start.elapsed().as_secs_f64());
     let connection = client
         .connect(server_addr, server_name)
@@ -243,10 +249,15 @@ async fn run(
     );
 
     let stats = tracer.stats();
-    for name in [&network.host_b().id, &network.host_a().id] {
+    for node in ["client", "server"] {
+        let name = match node {
+            "server" => &network.host_b().id,
+            "client" => &network.host_a().id,
+            _ => unreachable!(),
+        };
         let stats = &stats.by_node[name];
 
-        println!("* {name}");
+        println!("* {name} ({node})");
 
         println!(
             "  * Sent packets: {} ({} bytes)",

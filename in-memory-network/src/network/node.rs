@@ -59,7 +59,7 @@ impl Debug for HostHandle {
 #[derive(Clone)]
 pub struct Host {
     pub id: Arc<str>,
-    pub(crate) addr: SocketAddr,
+    pub addr: SocketAddr,
     pub(crate) highest_received_packet_number: Arc<AtomicU64>,
     pub(crate) inbound: Arc<Mutex<InboundQueue>>,
     outbound: Arc<OutboundBuffer>,
