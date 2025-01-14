@@ -61,6 +61,11 @@ impl SimulationStepper {
                 SimulationStepKind::PacketDropped(s) => {
                     self.node(&s.node_id).packet_dropped(s);
                 }
+                SimulationStepKind::PacketLostInTransit(s) => {
+                    self.in_flight_packets.remove(&s.packet_id);
+
+                    // TODO: raise an error if no packet was found
+                }
                 SimulationStepKind::PacketInTransit(s) => {
                     self.node(&s.node_id).packet_sent(s.packet_id);
 

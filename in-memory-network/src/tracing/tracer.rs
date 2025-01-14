@@ -3,8 +3,8 @@ use crate::network::node::Node;
 use crate::network::spec::{NetworkNodeSpec, NetworkSpec};
 use crate::pcap_exporter::PcapExporter;
 use crate::tracing::simulation_step::{
-    GenericPacketEvent, PacketDropped, PacketHasExtraDelay, PacketInTransit, SimulationStep,
-    SimulationStepKind,
+    GenericPacketEvent, PacketDropped, PacketHasExtraDelay, PacketInTransit, PacketLostInTransit,
+    SimulationStep, SimulationStepKind,
 };
 use crate::tracing::simulation_stepper::SimulationStepper;
 use crate::tracing::stats::NetworkStats;
@@ -113,6 +113,15 @@ impl SimulationStepTracer {
                 link.id,
             );
         }
+    }
+
+    pub fn track_lost_in_transit(&self, data: &InTransitData, link: &NetworkLink) {
+        self.record(SimulationStepKind::PacketLostInTransit(
+            PacketLostInTransit {
+                packet_id: data.id,
+                link_id: link.id.clone(),
+            },
+        ));
     }
 
     pub fn track_injected_failures(

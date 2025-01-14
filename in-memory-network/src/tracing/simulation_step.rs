@@ -21,6 +21,8 @@ pub enum SimulationStepKind {
     PacketInNode(GenericPacketEvent),
     /// The packet was dropped by one of the network nodes
     PacketDropped(PacketDropped),
+    /// The packet was lost while in transit (i.e. the link went down)
+    PacketLostInTransit(PacketLostInTransit),
     /// The packet was duplicated as a consequence of an injected failure
     PacketDuplicated(GenericPacketEvent),
     /// The packet has an extra delay as a consequence of an injected failure
@@ -73,6 +75,15 @@ pub struct PacketInTransit {
     pub packet_id: Uuid,
     #[serde(with = "crate::util::serde_arc_str")]
     pub node_id: Arc<str>,
+    #[serde(with = "crate::util::serde_arc_str")]
+    pub link_id: Arc<str>,
+}
+
+#[serde_as]
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PacketLostInTransit {
+    #[serde_as(as = "DisplayFromStr")]
+    pub packet_id: Uuid,
     #[serde(with = "crate::util::serde_arc_str")]
     pub link_id: Arc<str>,
 }

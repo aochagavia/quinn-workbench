@@ -522,12 +522,13 @@ fn schedule_forward_packet(
         return;
     };
 
+    let tracer = network.tracer.clone();
     if let Some(router) = network.routers_by_addr.get(&link.lock().target) {
         // The packet should be forwarded to the next router, after which it needs to be sent to
         // the next hop (hence the `network.send`)
         let network = network.clone();
         let router = router.clone();
-        schedule_forward_packet_inner(link.clone(), next_receive, move |transmit| {
+        schedule_forward_packet_inner(tracer, link.clone(), next_receive, move |transmit| {
             network.forward(Node::Router(router.clone()), transmit);
         });
     } else {
@@ -540,7 +541,7 @@ fn schedule_forward_packet(
             .clone();
         let host_queue = host.inbound.clone();
 
-        schedule_forward_packet_inner(link.clone(), next_receive, move |transmit| {
+        schedule_forward_packet_inner(tracer, link.clone(), next_receive, move |transmit| {
             network
                 .tracer
                 .track_packet_in_node(&Node::Host(host.clone()), &transmit);
@@ -550,6 +551,7 @@ fn schedule_forward_packet(
 }
 
 fn schedule_forward_packet_inner(
+    tracer: Arc<SimulationStepTracer>,
     link: Arc<Mutex<NetworkLink>>,
     next_receive: Instant,
     handle_transmit: impl Fn(InTransitData) + Send + 'static,
@@ -558,11 +560,19 @@ fn schedule_forward_packet_inner(
         // Take link delay into account
         tokio::time::sleep_until(next_receive).await;
 
-        // Now transfer inbound to outbound
+        // Now receive the packets
         let mut link = link.lock();
         let transmits = link.receive(usize::MAX);
-        for transmit in transmits {
-            handle_transmit(transmit);
+
+        // Only handle the packets if the link is up, otherwise track them as lost
+        if link.is_up() {
+            for transmit in transmits {
+                handle_transmit(transmit);
+            }
+        } else {
+            for transmit in transmits {
+                tracer.track_lost_in_transit(&transmit, &link);
+            }
         }
     });
 }
