@@ -5,7 +5,6 @@ use quinn::{AsyncUdpSocket, UdpPoller};
 use std::io::IoSliceMut;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -53,18 +52,12 @@ impl AsyncUdpSocket for HostHandle {
 
         let max_transmits = meta.len();
         let mut received = 0;
-        let mut highest_received = self
-            .host
-            .highest_received_packet_number
-            .load(Ordering::SeqCst);
 
         let out = meta.iter_mut().zip(bufs);
         for (in_transit, (meta, buf)) in inbound.receive(max_transmits).into_iter().zip(out) {
-            let out_of_order = in_transit.number < highest_received;
-            highest_received = highest_received.max(in_transit.number);
             self.network
                 .tracer
-                .track_read_by_host(host.id.clone(), &in_transit, out_of_order);
+                .track_read_by_host(host.id.clone(), &in_transit);
 
             received += 1;
             let transmit = in_transit.transmit;
@@ -79,10 +72,6 @@ impl AsyncUdpSocket for HostHandle {
             // Buffer
             buf[..transmit.contents.len()].copy_from_slice(&transmit.contents);
         }
-
-        self.host
-            .highest_received_packet_number
-            .fetch_max(highest_received, Ordering::SeqCst);
 
         if received == 0 {
             inbound.register_waker(cx.waker().clone());

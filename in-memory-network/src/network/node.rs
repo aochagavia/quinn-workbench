@@ -7,7 +7,6 @@ use anyhow::bail;
 use parking_lot::Mutex;
 use std::fmt::{Debug, Formatter};
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -60,7 +59,6 @@ impl Debug for HostHandle {
 pub struct Host {
     pub id: Arc<str>,
     pub addr: SocketAddr,
-    pub(crate) highest_received_packet_number: Arc<AtomicU64>,
     pub(crate) inbound: Arc<Mutex<InboundQueue>>,
     outbound: Arc<OutboundBuffer>,
 }
@@ -83,7 +81,6 @@ impl Host {
         Ok(Self {
             addr: SocketAddr::new(node_address, HOST_PORT),
             id: Arc::from(node.id.into_boxed_str()),
-            highest_received_packet_number: Arc::new(Default::default()),
             inbound: Arc::new(Mutex::new(InboundQueue::new())),
             outbound: Arc::new(OutboundBuffer::new(node.buffer_size_bytes as usize)),
         })
