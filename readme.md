@@ -143,8 +143,6 @@ Network events are used to bring links up and down at different times of the sim
 simulate an orbiter being unreachable at specific intervals). The format is fairly self-documenting,
 as you can see in [events.json](test-data/earth-mars/events.json).
 
-Note that the `id` field in an event refers to the link id in the topology graph file.
-
 ## Command line arguments
 
 While the JSON configuration controls the QUIC and network parameters, the following command line
