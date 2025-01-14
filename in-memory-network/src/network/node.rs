@@ -85,9 +85,7 @@ impl Host {
             id: Arc::from(node.id.into_boxed_str()),
             highest_received_packet_number: Arc::new(Default::default()),
             inbound: Arc::new(Mutex::new(InboundQueue::new())),
-
-            // Hosts have no outbound queue, which is equivalent to a zero-capacity queue
-            outbound: Arc::new(OutboundBuffer::new(0)),
+            outbound: Arc::new(OutboundBuffer::new(node.buffer_size_bytes as usize)),
         })
     }
 }

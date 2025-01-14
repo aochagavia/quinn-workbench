@@ -3,135 +3,136 @@
   "nodes": [
     {
       "id": "GND",
+      "type": "host",
+      "bufferSizeBytes": 104857600,
       "interfaces": [
         {
           "addresses": [
             {
-              "address": "192.168.40.1"
+              "address": "192.168.40.1/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.43.0/24",
+              "next": "192.168.40.2",
+              "cost": 100
             }
           ]
-        }
-      ],
-      "routes": [
-        {
-          "destination": "192.168.43.0/24",
-          "next": "192.168.40.2",
-          "cost": 100
         }
       ]
     },
     {
-      "type": "router",
       "id": "DSN",
+      "type": "router",
+      "bufferSizeBytes": 104857600,
       "interfaces": [
         {
           "addresses": [
             {
-              "address": "192.168.40.2"
+              "address": "192.168.40.2/24"
             }
-          ]
+          ],
+          "routes": []
         },
         {
           "addresses": [
             {
-              "address": "192.168.41.1"
+              "address": "192.168.41.1/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.43.0/24",
+              "next": "192.168.41.2",
+              "cost": 100
             }
           ]
-        }
-      ],
-      "routes": [
-        {
-          "destination": "192.168.43.0/24",
-          "next": "192.168.41.2",
-          "cost": 100
-        },
-        {
-          "destination": "192.168.40.0/24",
-          "next": "192.168.40.1",
-          "cost": 100
         }
       ]
     },
     {
-      "type": "router",
       "id": "MRO",
+      "type": "router",
+      "bufferSizeBytes": 104857600,
       "interfaces": [
         {
           "addresses": [
             {
-              "address": "192.168.41.2"
+              "address": "192.168.41.2/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.40.0/24",
+              "next": "192.168.41.1",
+              "cost": 100
             }
           ]
         },
         {
           "addresses": [
             {
-              "address": "192.168.42.1"
+              "address": "192.168.42.1/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.43.0/24",
+              "next": "192.168.42.2",
+              "cost": 100
             }
           ]
-        }
-      ],
-      "routes": [
-        {
-          "destination": "192.168.43.0/24",
-          "next": "192.168.42.2",
-          "cost": 100
-        },
-        {
-          "destination": "192.168.40.0/24",
-          "next": "192.168.41.1",
-          "cost": 100
         }
       ]
     },
     {
-      "type": "router",
       "id": "M20",
+      "type": "router",
+      "bufferSizeBytes": 104857600,
       "interfaces": [
         {
           "addresses": [
             {
-              "address": "192.168.42.2"
+              "address": "192.168.42.2/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.40.0/24",
+              "next": "192.168.42.1",
+              "cost": 100
             }
           ]
         },
         {
           "addresses": [
             {
-              "address": "192.168.43.1"
+              "address": "192.168.43.1/24"
             }
-          ]
-        }
-      ],
-      "routes": [
-        {
-          "destination": "192.168.40.0/24",
-          "next": "192.168.42.1",
-          "cost": 100
-        },
-        {
-          "destination": "192.168.43.0/24",
-          "next": "192.168.43.2",
-          "cost": 100
+          ],
+          "routes": []
         }
       ]
     },
     {
       "id": "ING",
+      "type": "host",
+      "bufferSizeBytes": 104857600,
       "interfaces": [
         {
           "addresses": [
             {
-              "address": "192.168.43.2"
+              "address": "192.168.43.2/24"
+            }
+          ],
+          "routes": [
+            {
+              "destination": "192.168.40.0/24",
+              "next": "192.168.43.1",
+              "cost": 100
             }
           ]
-        }
-      ],
-      "routes": [
-        {
-          "destination": "192.168.40.0/24",
-          "next": "192.168.43.1",
-          "cost": 100
         }
       ]
     }

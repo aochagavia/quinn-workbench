@@ -153,12 +153,10 @@ impl InMemoryNetwork {
                 }
             }
 
-            // TODO: get this from config instead of hardcoding it
-            let buffer_size_bytes = 1024 * 1024 * 100;
             let router = Arc::new(Router {
                 id: Arc::from(r.id.into_boxed_str()),
                 addresses: addresses.clone(),
-                outbound_buffer: Arc::new(OutboundBuffer::new(buffer_size_bytes)),
+                outbound_buffer: Arc::new(OutboundBuffer::new(r.buffer_size_bytes as usize)),
             });
 
             for address in addresses {
