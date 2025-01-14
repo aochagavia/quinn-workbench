@@ -51,6 +51,7 @@ struct NetworkRouteJson {
     #[serde_as(as = "DisplayFromStr")]
     destination: IpRange,
     next: IpAddr,
+    cost: u64,
 }
 
 #[serde_as]
@@ -116,6 +117,7 @@ impl From<NetworkSpecJson> for in_memory_network::network::spec::NetworkSpec {
                             .map(|r| in_memory_network::network::route::Route {
                                 destination: r.destination,
                                 next: r.next,
+                                cost: r.cost,
                             })
                             .collect(),
                     })

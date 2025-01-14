@@ -69,8 +69,10 @@ impl InMemoryNetwork {
         let all_node_interfaces = network_spec.nodes.iter().map(|n| &n.interfaces);
         for single_node_interfaces in all_node_interfaces {
             for interface in single_node_interfaces {
-                for addr in &interface.addresses {
-                    routes_by_addr.insert(addr.as_ip_addr(), Arc::new(interface.routes.clone()));
+                for interface_addr in &interface.addresses {
+                    let mut routes = interface.routes.clone();
+                    routes.sort_by_key(|r| r.cost); // ascending order
+                    routes_by_addr.insert(interface_addr.as_ip_addr(), Arc::new(routes));
                 }
             }
         }
@@ -92,7 +94,7 @@ impl InMemoryNetwork {
             let already_existing = hosts_by_addr.insert(h.addr, h);
 
             if let Some(host) = already_existing {
-            bail!(
+                bail!(
                 "Expected hosts to have unique ip addresses, but at least two hosts are using {}",
                 host.addr.ip()
             );
@@ -326,10 +328,24 @@ impl InMemoryNetwork {
         node: &Node,
         destination: SocketAddr,
     ) -> Option<Arc<Mutex<NetworkLink>>> {
+        // If no links are found in the first try, try again allowing links that are down
+        self.resolve_link_internal(node, destination, false)
+            .or_else(|| self.resolve_link_internal(node, destination, true))
+    }
+
+    fn resolve_link_internal(
+        &self,
+        node: &Node,
+        destination: SocketAddr,
+        allow_down: bool,
+    ) -> Option<Arc<Mutex<NetworkLink>>> {
         // Prefer direct links if available
         for node_addr in node.addresses() {
             if let Some(link) = self.links_by_addr.get(&(node_addr, destination.ip())) {
-                return Some(link.clone());
+                let up = link.lock().is_up();
+                if up || allow_down {
+                    return Some(link.clone());
+                }
             }
         }
 
@@ -345,7 +361,10 @@ impl InMemoryNetwork {
             };
 
             if let Some(link) = self.links_by_addr.get(&(node_addr, next_hop_addr)) {
-                return Some(link.clone());
+                let up = link.lock().is_up();
+                if up || allow_down {
+                    return Some(link.clone());
+                }
             }
         }
 
