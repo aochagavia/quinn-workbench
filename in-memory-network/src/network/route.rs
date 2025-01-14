@@ -6,6 +6,7 @@ use std::str::FromStr;
 pub struct Route {
     pub destination: IpRange,
     pub next: IpAddr,
+    pub cost: u64,
 }
 
 impl Route {
