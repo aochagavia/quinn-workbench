@@ -1,12 +1,15 @@
-Deep Space Quinn Workbench
-==========================
+Deep Space Quinn Workbench 2
+============================
 
 A command-line application to simulate QUIC connections in different scenarios (network
-characteristics and QUIC parameters). The simulation creates a single connection, issues a fixed
+topology and QUIC parameters). The simulation creates a single connection, issues a fixed
 number of requests from the client to the server, and streams the server's responses back to the
 client.
 
-### Features
+_Note: for the previous version of quinn workbench go to [this
+branch](https://github.com/aochagavia/quinn-workbench/tree/v1)._
+
+## Features
 
 - Pure. No IO operations are made, everything happens in-memory within a single process.
 - Time warping. The simulation's internal clock advances automatically to the next event, making the
@@ -15,11 +18,11 @@ client.
 - Inspectable. Next to informative command-line output and statistics, the application generates a
   synthetic pcap file, so you can examine the traffic in more detail using Wireshark.
 - Configurable network settings and QUIC parameters through reusable JSON config files (see
-  `test-data/configs` and [JSON config details](#json-config-details)).
+  `test-data` and [JSON config details](#json-config-details)).
 - Configurable simulation behavior through command-line arguments (see `cargo run --release --
   --help`).
 
-### Getting started
+## Getting started
 
 After [installing Rust](https://rustup.rs/), you can get started with:
 
@@ -27,7 +30,9 @@ After [installing Rust](https://rustup.rs/), you can get started with:
 cargo run --release -- \
   --quinn-config test-data/earth-mars/quinn.json \
   --network-graph test-data/earth-mars/networkgraph-5nodes.json \
-  --network-events test-data/earth-mars/events.json
+  --network-events test-data/earth-mars/events.json \
+  --client-ip-address 192.168.40.1 \
+  --server-ip-address 192.168.43.2
 ```
 
 Here's an example issuing a single request and receiving a 10 MiB response:
@@ -37,6 +42,8 @@ cargo run --release -- \
   --quinn-config test-data/earth-mars/quinn.json \
   --network-graph test-data/earth-mars/networkgraph-5nodes.json \
   --network-events test-data/earth-mars/events.json \
+  --client-ip-address 192.168.40.1 \
+  --server-ip-address 192.168.43.2 \
   --repeat 1 --response-size 10485760
 ```
 
@@ -47,6 +54,8 @@ cargo run --release -- \
   --quinn-config test-data/earth-mars/quinn.json \
   --network-graph test-data/earth-mars/networkgraph-5nodes.json \
   --network-events test-data/earth-mars/events.json \
+  --client-ip-address 192.168.40.1 \
+  --server-ip-address 192.168.43.2 \
   --quinn-rng-seed 1234 --simulated-network-rng-seed 1337
 ```
 
@@ -57,78 +66,97 @@ cargo run --release -- \
   --quinn-config test-data/earth-mars/quinn.json \
   --network-graph test-data/earth-mars/networkgraph-5nodes.json \
   --network-events test-data/earth-mars/events.json \
+  --client-ip-address 192.168.40.1 \
+  --server-ip-address 192.168.43.2 \
   --non-deterministic
 ```
 
-### JSON QUINN and Network Characteristics config details
+## JSON config details
 
-Consider the following config:
+#### Quinn config
+
+Consider the following quinn config (which gets loaded through the `--quinn-config` flag, as shown
+in the previous examples):
 
 ```json
 {
-  "quinn": {
-    "initial_rtt_ms": 100000000,
-    "maximum_idle_timeout_ms": 100000000000,
-    "packet_threshold": 4294967295,
-    "mtu_discovery": false,
-    "maximize_send_and_receive_windows": true,
-    "max_ack_delay_ms": 18446744073709551615,
-    "ack_eliciting_threshold": 10,
-    "fixed_congestion_window": 10240
-  },
-  "network": {
-    "delay_ms": 5000,
-    "extra_delay_ms": 200,
-    "extra_delay_ratio": 0.1,
-    "packet_duplication_ratio": 0.05,
-    "packet_loss_ratio": 0.05,
-    "congestion_event_ratio":  0.00,
-    "bandwidth": 10240
-  }
+  "initial_rtt_ms": 100000000,
+  "maximum_idle_timeout_ms": 100000000000,
+  "packet_threshold": 4294967295,
+  "mtu_discovery": false,
+  "maximize_send_and_receive_windows": true,
+  "max_ack_delay_ms": 18446744073709551615,
+  "ack_eliciting_threshold": 10,
+  "fixed_congestion_window": 10240
 }
 ```
 
 Here's the meaning of the different parameters:
 
-- `quinn.initial_rtt_ms`: The initial Round Trip Time (RTT) of the QUIC connection in milliseconds
+- `initial_rtt_ms`: The initial Round Trip Time (RTT) of the QUIC connection in milliseconds
   (used before an actual RTT sample is available). For delay-tolerant networking, set this slightly
   higher than the expected real RTT to avoid unnecessary packet retransmissions.
-- `quinn.maximum_idle_timeout_ms`: The maximum idle timeout of the QUIC connection in milliseconds.
+- `maximum_idle_timeout_ms`: The maximum idle timeout of the QUIC connection in milliseconds.
   For continuous information exchange, use a small value to detect connection loss quickly. For
   delay-tolerant networking, use a very high value to prevent connection loss due to unexpected
   delays.
-- `quinn.packet_threshold`: Maximum reordering in packet numbers before considering a packet lost.
+- `packet_threshold`: Maximum reordering in packet numbers before considering a packet lost.
   Should not be less than 3, as per RFC5681.
-- `quinn.mtu_discovery`: Boolean flag to enable or disable MTU discovery.
-- `quinn.maximize_send_and_receive_windows`: Boolean flag to maximize send and receive windows,
+- `mtu_discovery`: Boolean flag to enable or disable MTU discovery.
+- `maximize_send_and_receive_windows`: Boolean flag to maximize send and receive windows,
   allowing an unlimited number of unacknowledged in-flight packets.
-- `quinn.max_ack_delay_ms`: The maximum amount of time, in milliseconds, that an endpoint waits
+- `max_ack_delay_ms`: The maximum amount of time, in milliseconds, that an endpoint waits
   before sending an ACK when the ACK-eliciting threshold hasn't been reached. Setting this to a high
   value is useful in combination with a high ACK-eliciting threshold.
-- `quinn.ack_eliciting_threshold`: The number of ACK-eliciting packets an endpoint may receive
+- `ack_eliciting_threshold`: The number of ACK-eliciting packets an endpoint may receive
   without immediately sending an ACK. A high value is useful when expecting long streams of
   information from the server without sending anything back from the client.
-- `quinn.fixed_congestion_window` (optional): If provided, disables congestion control and uses a
+- `fixed_congestion_window` (optional): If provided, disables congestion control and uses a
   fixed congestion window size in bytes.
-- `network.delay_ms`: The one-way delay of the network in milliseconds.
-- `network.extra_delay_ms`: The additional one-way delay of the network in milliseconds, applied
-  randomly according to `extra_delay_ratio`.
-- `network.extra_delay_ratio`: The ratio of packets that will have an extra delay applied,
-  simulating packet reordering (the value must be between 0 and 1).
-- `network.packet_duplication_ratio`: The ratio of packets that will be duplicated upon being sent
-  (the value must be between 0 and 1).
-- `network.packet_loss_ratio`: The ratio of packets that will be lost during transmission (the value
-  must be between 0 and 1).
-- `network.congestion_event_ratio`: The ratio of packets that will be marked with a CE ECN codepoint
-  (the value must be between 0 and 1).
-- `network.bandwidth`: The one-way bandwidth of the network in bytes.
 
-### Command line arguments
+#### Network topology config
+
+The topology configuration is fairly self-documenting. See for instance
+[networkgraph-fullmars.json](test-data/earth-mars/networkgraph-fullmars.json) and
+[networkgraph-5nodes.json](test-data/earth-mars/networkgraph-5nodes.json)
+
+Note that links are uni-directional, so two entries are necessary to describe a bidirectional link.
+Also, links can be configured individually with the following parameters:
+
+- `link.delay_ms` (required): The delay of the link in milliseconds (i.e. time it takes for a packet
+  to arrive to its destination).
+- `link.bandwidth_bps` (required): The bandwidth of the link in bits per second.
+- `link.extra_delay_ms`: The additional delay of the link in milliseconds, applied randomly
+  according to `extra_delay_ratio`.
+- `link.extra_delay_ratio`: The ratio of packets that will have an extra delay applied, used to
+  artificially introduce packet reordering (the value must be between 0 and 1).
+- `link.packet_duplication_ratio`: The ratio of packets that will be duplicated upon being sent,
+  (the value must be between 0 and 1).
+- `link.packet_loss_ratio`: The ratio of packets that will be lost during transmission (the value
+  must be between 0 and 1).
+- `link.congestion_event_ratio`: The ratio of packets that will be marked with a CE ECN codepoint
+  (the value must be between 0 and 1).
+
+#### Network events config
+
+Network events are used to bring links up and down at different times of the simulation (e.g. to
+simulate an orbiter being unreachable at specific intervals). The format is fairly self-documenting,
+as you can see in [events.json](test-data/earth-mars/events.json).
+
+Note that the `id` field in an event refers to the link id in the topology graph file.
+
+## Command line arguments
 
 While the JSON configuration controls the QUIC and network parameters, the following command line
 flags control other aspects of the simulation:
 
 ```
+--client-ip-address <CLIENT_IP_ADDRESS>
+    The IP address of the node used as a client
+
+--server-ip-address <SERVER_IP_ADDRESS>
+    The IP address of the node used as a server
+
 --repeat <REPEAT>
     The amount of times the request should be repeated
 
@@ -151,24 +179,14 @@ flags control other aspects of the simulation:
     The random seed used for the simulated network (governing packet loss, duplication and reordering)
 
     [default: 42]
-    
+
 --network-graph <NETWORK_GRAPH_JSON_FILE>
     Creates a network based on the topology described in the JSON file
-    
+
 --network-events <NETWORK_EVENTS_JSON_FILE>
-    Apply various timed events, such as link up and down, to the network 
+    Apply various timed events, such as link up and down, to the network
 
 ```
-
-### JSON Network Topology Config Details
-See examples in [test-data/earth-mars](test-data/earth-mars/networkgraph-fullmars.json)
-
-Note that links are uni-directional, so two entries are necessary to describe a bidirectional link.
-
-### JSON Network Events Config Details
-See examples in [test-data/earth-mars](test-data/earth-mars/events.json)
-
-Note that the link id in an event refers to the link id in the topology graph file.
 
 ### Acknowledgements
 
