@@ -15,7 +15,6 @@ use crate::network::event::{NetworkEventPayload, NetworkEvents, UpdateLinkStatus
 use crate::network::link::LinkStatus;
 use crate::network::node::{Host, HostHandle, Node};
 use crate::network::outbound_buffer::OutboundBuffer;
-use crate::network::route::IpRange;
 use crate::network::spec::{NetworkSpec, NodeKind};
 use crate::tracing::tracer::SimulationStepTracer;
 use crate::{InTransitData, OwnedTransmit, HOST_PORT};
@@ -322,13 +321,19 @@ impl InMemoryNetwork {
     }
 
     /// Resolves the link that should be used to go from the node to the destination
-    ///
-    /// Uses the node's routing table to identify the next hop's link
     fn resolve_link(
         &self,
         node: &Node,
         destination: SocketAddr,
     ) -> Option<Arc<Mutex<NetworkLink>>> {
+        // Prefer direct links if available
+        for node_addr in node.addresses() {
+            if let Some(link) = self.links_by_addr.get(&(node_addr, destination.ip())) {
+                return Some(link.clone());
+            }
+        }
+
+        // Use routing when no direct links are available
         for node_addr in node.addresses() {
             let routes = &self.routes_by_addr[&node_addr];
             let Some(next_hop_addr) = routes
