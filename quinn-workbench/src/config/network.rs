@@ -13,19 +13,17 @@ pub struct NetworkSpecJson {
 }
 
 #[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct NetworkNodeJson {
     id: String,
-    #[serde(rename = "type")]
-    #[serde(default = "default_network_node_kind")]
+    buffer_size_bytes: u64,
+    #[serde(flatten)]
     kind: NetworkNodeKindJson,
     interfaces: Vec<NetworkInterfaceJson>,
 }
 
-fn default_network_node_kind() -> NetworkNodeKindJson {
-    NetworkNodeKindJson::Host
-}
-
 #[derive(Deserialize, Clone)]
+#[serde(tag = "type")]
 #[serde(rename_all = "camelCase")]
 enum NetworkNodeKindJson {
     Router,
@@ -106,6 +104,7 @@ impl From<NetworkSpecJson> for in_memory_network::network::spec::NetworkSpec {
                     }
                     NetworkNodeKindJson::Host => in_memory_network::network::spec::NodeKind::Host,
                 },
+                buffer_size_bytes: n.buffer_size_bytes,
                 interfaces: n
                     .interfaces
                     .into_iter()

@@ -4,6 +4,7 @@
     {
       "id": "GND",
       "type": "host",
+      "bufferSizeBytes": 104857600,
       "interfaces": [
         {
           "addresses": [
@@ -27,8 +28,9 @@
       ]
     },
     {
-      "type": "router",
       "id": "DSN",
+      "type": "router",
+      "bufferSizeBytes": 104857600,
       "interfaces": [
         {
           "addresses": [
@@ -122,8 +124,9 @@
       ]
     },
     {
-      "type": "router",
       "id": "MRO",
+      "type": "router",
+      "bufferSizeBytes": 104857600,
       "interfaces": [
         {
           "addresses": [
@@ -170,8 +173,9 @@
       ]
     },
     {
-      "type": "router",
       "id": "TGO",
+      "type": "router",
+      "bufferSizeBytes": 104857600,
       "interfaces": [
         {
           "addresses": [
@@ -218,8 +222,9 @@
       ]
     },
     {
-      "type": "router",
       "id": "MVN",
+      "type": "router",
+      "bufferSizeBytes": 104857600,
       "interfaces": [
         {
           "addresses": [
@@ -266,8 +271,9 @@
       ]
     },
     {
-      "type": "router",
       "id": "ODY",
+      "type": "router",
+      "bufferSizeBytes": 104857600,
       "interfaces": [
         {
           "addresses": [
@@ -314,8 +320,9 @@
       ]
     },
     {
-      "type": "router",
       "id": "M20",
+      "type": "router",
+      "bufferSizeBytes": 104857600,
       "interfaces": [
         {
           "addresses": [
@@ -384,8 +391,9 @@
       ]
     },
     {
-      "type": "host",
       "id": "MSL",
+      "type": "host",
+      "bufferSizeBytes": 104857600,
       "interfaces": [
         {
           "addresses": [
@@ -456,6 +464,7 @@
     {
       "id": "ING",
       "type": "host",
+      "bufferSizeBytes": 104857600,
       "interfaces": [
         {
           "addresses": [
