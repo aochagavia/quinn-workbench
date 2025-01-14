@@ -321,27 +321,26 @@ impl InMemoryNetwork {
     }
 
     /// Resolves the link that should be used to go from the node to the destination
-    fn resolve_link(
-        &self,
-        node: &Node,
-        destination: SocketAddr,
-    ) -> Option<Arc<Mutex<NetworkLink>>> {
-        // If no links are found in the first try, try again allowing links that are down
-        self.resolve_link_internal(node, destination, false)
-            .or_else(|| self.resolve_link_internal(node, destination, true))
+    fn resolve_link(&self, node: &Node, data: &InTransitData) -> Option<Arc<Mutex<NetworkLink>>> {
+        // If no links are found in the first try, try again allowing local buffering
+        self.resolve_link_internal(node, data, false)
+            .or_else(|| self.resolve_link_internal(node, data, true))
     }
 
     fn resolve_link_internal(
         &self,
         node: &Node,
-        destination: SocketAddr,
-        allow_down: bool,
+        data: &InTransitData,
+        allow_buffering: bool,
     ) -> Option<Arc<Mutex<NetworkLink>>> {
         // Prefer direct links if available
         for node_addr in node.addresses() {
-            if let Some(link) = self.links_by_addr.get(&(node_addr, destination.ip())) {
-                let up = link.lock().is_up();
-                if up || allow_down {
+            if let Some(link) = self
+                .links_by_addr
+                .get(&(node_addr, data.transmit.destination.ip()))
+            {
+                let bandwidth_available = link.lock().has_bandwidth_available(data);
+                if bandwidth_available || allow_buffering {
                     return Some(link.clone());
                 }
             }
@@ -352,15 +351,15 @@ impl InMemoryNetwork {
             let routes = &self.routes_by_addr[&node_addr];
             let Some(next_hop_addr) = routes
                 .iter()
-                .find_map(|r| r.next_hop_towards_destination(destination.ip()))
+                .find_map(|r| r.next_hop_towards_destination(data.transmit.destination.ip()))
             else {
                 // No route found for this node's address, try another one
                 continue;
             };
 
             if let Some(link) = self.links_by_addr.get(&(node_addr, next_hop_addr)) {
-                let up = link.lock().is_up();
-                if up || allow_down {
+                let bandwidth_available = link.lock().has_bandwidth_available(data);
+                if bandwidth_available || allow_buffering {
                     return Some(link.clone());
                 }
             }
@@ -391,7 +390,7 @@ impl InMemoryNetwork {
     ) {
         self.tracer.track_packet_in_node(&current_node, &data);
 
-        let Some(link) = self.resolve_link(&current_node, data.transmit.destination) else {
+        let Some(link) = self.resolve_link(&current_node, &data) else {
             let stepper = self.tracer.stepper();
             let nodes: Vec<_> = stepper.get_packet_path(data.id);
             let mut path = nodes.join(" -> ");

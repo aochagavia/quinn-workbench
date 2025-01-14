@@ -85,10 +85,6 @@ impl NetworkLink {
         }
     }
 
-    pub fn is_up(&self) -> bool {
-        !self.status.is_down()
-    }
-
     pub(crate) fn status_str(&self) -> &'static str {
         match self.status {
             LinkStatus::Up => "UP",
