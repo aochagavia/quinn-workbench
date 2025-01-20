@@ -12,9 +12,17 @@ pub struct CliOpt {
     #[arg(long)]
     pub server_ip_address: IpAddr,
 
-    /// The amount of times the request should be repeated
+    /// The number of requests that should be made
     #[arg(long, default_value_t = 10)]
-    pub repeat: u32,
+    pub requests: u32,
+
+    /// The number of concurrent connections used when making the requests
+    #[arg(long, default_value_t = 1)]
+    pub concurrent_connections: u8,
+
+    /// The number of concurrent streams per connection used when making the requests
+    #[arg(long, default_value_t = 1)]
+    pub concurrent_streams_per_connection: u32,
 
     /// The size of each response, in bytes
     #[arg(long, default_value_t = 1024)]

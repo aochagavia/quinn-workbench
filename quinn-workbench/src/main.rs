@@ -1,35 +1,27 @@
+mod client;
 mod config;
 mod quinn_extensions;
+mod server;
+mod simulation;
 
 use crate::config::SimulationConfig;
-use anyhow::{anyhow, Context};
+use crate::simulation::Simulation;
+use anyhow::Context;
 use clap::Parser;
 use config::cli::CliOpt;
 use config::quinn::QuinnJsonConfig;
-use fastrand::Rng;
-use in_memory_network::network::event::NetworkEvents;
-use in_memory_network::network::node::HostHandle;
-use in_memory_network::network::spec::NetworkSpec;
-use in_memory_network::network::InMemoryNetwork;
 use in_memory_network::pcap_exporter::PcapExporter;
-use in_memory_network::tracing::tracer::SimulationStepTracer;
-use quinn::crypto::rustls::QuicClientConfig;
-use quinn::rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use quinn::rustls::RootCertStore;
-use quinn::{ClientConfig, Endpoint, EndpointConfig, TransportConfig, VarInt};
+use quinn::{EndpointConfig, TransportConfig, VarInt};
 use quinn_extensions::ecn_cc::EcnCcFactory;
 use quinn_extensions::no_cc::NoCCConfig;
-use quinn_extensions::no_cid::NoConnectionIdGenerator;
 use quinn_proto::congestion::NewRenoConfig;
 use quinn_proto::AckFrequencyConfig;
-use rustls::pki_types::PrivatePkcs8KeyDer;
 use serde::de::DeserializeOwned;
 use std::fs;
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::Instant;
 use tracing_subscriber::fmt::Subscriber;
 use tracing_subscriber::EnvFilter;
 
@@ -50,19 +42,17 @@ fn main() -> anyhow::Result<()> {
         .build()
         .expect("failed to initialize tokio");
 
-    let start = Instant::now();
     let pcap_file =
         File::create("capture.pcap").context("failed to open capture.pcap for writing")?;
     let pcap_exporter = Arc::new(PcapExporter::new(pcap_file));
-    let result = rt.block_on(run(&opt, simulation_config, pcap_exporter.clone()));
+    let result = rt.block_on(run_and_report_stats(
+        &opt,
+        simulation_config,
+        pcap_exporter.clone(),
+    ));
 
     // Ensure the pcap export is written to disk
     pcap_exporter.flush()?;
-
-    if result.is_err() {
-        eprintln!("Error after {:.2}s", start.elapsed().as_secs_f64());
-    }
-
     result
 }
 
@@ -86,157 +76,18 @@ fn load_json<T: DeserializeOwned>(path: &Path) -> anyhow::Result<T> {
     Ok(parsed)
 }
 
-async fn run(
+async fn run_and_report_stats(
     options: &CliOpt,
     config: SimulationConfig,
     pcap_exporter: Arc<PcapExporter>,
 ) -> anyhow::Result<()> {
-    println!("--- Params ---");
-    let (quinn_rng_seed, simulated_network_rng_seed) = if options.non_deterministic {
-        let mut rng = Rng::new();
-        (rng.u64(..), rng.u64(..))
-    } else {
-        (options.quinn_rng_seed, options.simulated_network_rng_seed)
+    let mut simulation = Simulation::new();
+    let result = simulation.run(options, config, pcap_exporter.clone()).await;
+
+    let Some((tracer, network)) = simulation.tracer_and_network else {
+        eprintln!("Error...");
+        return result;
     };
-    println!("* Quinn seed: {}", quinn_rng_seed);
-    println!("* Network seed: {}", simulated_network_rng_seed);
-    println!("* Quinn config path: {}", options.quinn_config.display());
-    println!("* Network graph path: {}", options.network_graph.display());
-    println!(
-        "* Network events path: {}",
-        options.network_events.display()
-    );
-
-    let start = Instant::now();
-
-    let network_spec: NetworkSpec = config.network_graph.into();
-
-    // Network check
-    let network_check_pcap_exporter = Arc::new(PcapExporter::new(std::io::empty()));
-    let network_events = NetworkEvents::new(
-        config
-            .network_events
-            .clone()
-            .into_iter()
-            .map(|e| e.into())
-            .collect(),
-    );
-    let network = InMemoryNetwork::initialize(
-        network_spec.clone(),
-        network_events,
-        Arc::new(SimulationStepTracer::new(
-            network_check_pcap_exporter,
-            network_spec.clone(),
-        )),
-        Rng::with_seed(simulated_network_rng_seed),
-        start,
-    )?;
-
-    println!("--- Network ---");
-    println!("* Initial link statuses (derived from events):");
-    for link_spec in &network_spec.links {
-        let status = network.get_link_status(&link_spec.id);
-        println!("  * {}: {}", link_spec.id, status);
-    }
-    println!("* Running connectivity check...");
-    let (arrived1, arrived2) = network
-        .assert_connectivity_between_hosts(options.server_ip_address, options.client_ip_address)
-        .await?;
-    println!(
-        "* Connectivity check passed (packets arrived after {} ms and {} ms)",
-        arrived1.as_millis(),
-        arrived2.as_millis()
-    );
-
-    drop(network);
-
-    let start = Instant::now();
-
-    // Network
-    let tracer = Arc::new(SimulationStepTracer::new(
-        pcap_exporter,
-        network_spec.clone(),
-    ));
-    let network = InMemoryNetwork::initialize(
-        network_spec,
-        NetworkEvents::new(
-            config
-                .network_events
-                .into_iter()
-                .map(|e| e.into())
-                .collect(),
-        ),
-        tracer.clone(),
-        Rng::with_seed(simulated_network_rng_seed),
-        start,
-    )?;
-
-    // Set up server certificate
-    let server_name = "server-name";
-    let cert = rcgen::generate_simple_self_signed(vec![server_name.into()]).unwrap();
-    let key = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
-    let cert = CertificateDer::from(cert.cert);
-
-    // Let a server listen in the background
-    let mut quinn_rng = Rng::with_seed(quinn_rng_seed);
-    let server_host = network.host(options.server_ip_address);
-    let server_addr = server_host.addr;
-    let server = server_endpoint(
-        cert.clone(),
-        key.into(),
-        network.host_handle(server_host.clone()),
-        &config.quinn,
-        &mut quinn_rng,
-    )?;
-    let server_task = tokio::spawn(server_listen(server, options.response_size));
-
-    // Make repeated requests
-    println!("--- Requests ---");
-    let client_host = network.host(options.client_ip_address);
-    let client = client_endpoint(
-        cert,
-        network.host_handle(client_host.clone()),
-        &config.quinn,
-        &mut quinn_rng,
-    )?;
-    println!("{:.2}s CONNECT", start.elapsed().as_secs_f64());
-    let connection = client
-        .connect(server_addr, server_name)
-        .context("failed to start connecting to server")?
-        .await
-        .context("client failed to connect to server")?;
-
-    let request_number = options.repeat;
-    let request = "GET /index.html";
-    for _ in 0..request_number {
-        println!("{:.2}s {request}", start.elapsed().as_secs_f64());
-
-        let (mut tx, mut rx) = connection.open_bi().await?;
-        tx.write_all(request.as_bytes()).await?;
-        tx.finish()?;
-
-        rx.read_to_end(usize::MAX)
-            .await
-            .context("failed to read response from server")?;
-    }
-
-    println!(
-        "{:.2}s Done sending {request_number} requests and receiving their responses",
-        start.elapsed().as_secs_f64()
-    );
-
-    connection.close(VarInt::from_u32(0), &[]);
-
-    drop(connection);
-    drop(client);
-
-    server_task
-        .await
-        .context("server task crashed")?
-        .context("server task errored")?;
-
-    let total_time_sec = start.elapsed().as_secs_f64();
-    println!("{:.2}s Connection closed", total_time_sec);
 
     println!("--- Replay log ---");
     let replay_log_path = "replay-log.json";
@@ -245,16 +96,13 @@ async fn run(
     println!("* Replay log available at {replay_log_path}");
 
     println!("--- Stats ---");
-    println!(
-        "* Time from start to connection closed: {:.2}s",
-        total_time_sec,
-    );
-
     let stats = tracer.stats();
+    let server_host = network.host(options.server_ip_address);
+    let client_host = network.host(options.client_ip_address);
     for node in ["client", "server"] {
         let name = match node {
-            "server" => &server_host.id,
-            "client" => &client_host.id,
+            "server" => &network.host(server_host.addr.ip()).id,
+            "client" => &network.host(client_host.addr.ip()).id,
             _ => unreachable!(),
         };
         let stats = &stats.by_node[name];
@@ -298,110 +146,18 @@ async fn run(
         );
     }
 
-    Ok(())
-}
-
-async fn server_listen(endpoint: Endpoint, response_payload_size: usize) -> anyhow::Result<()> {
-    let conn = endpoint
-        .accept()
-        .await
-        .ok_or(anyhow!("failed to accept incoming connection"))?
-        .await?;
-
-    let response: Vec<_> = "Lorem ipsum "
-        .bytes()
-        .cycle()
-        .take(response_payload_size)
-        .collect();
-
-    while let Ok((mut tx, mut rx)) = conn.accept_bi().await {
-        // Read the request
-        let request = rx.read_to_end(usize::MAX).await?;
-        assert_eq!(request, b"GET /index.html");
-
-        // Respond
-        tx.write_all(&response).await?;
-        tx.finish()?;
+    if result.is_err() {
+        eprintln!("Error...");
     }
 
-    Ok(())
-}
-
-fn server_endpoint(
-    cert: CertificateDer<'static>,
-    key: PrivateKeyDer<'static>,
-    server_host: HostHandle,
-    quinn_config: &QuinnJsonConfig,
-    quinn_rng: &mut Rng,
-) -> anyhow::Result<Endpoint> {
-    let mut seed = [0; 32];
-    quinn_rng.fill(&mut seed);
-
-    let mut server_config = quinn::ServerConfig::with_single_cert(vec![cert], key).unwrap();
-    server_config.transport = Arc::new(transport_config(quinn_config));
-    Endpoint::new_with_abstract_socket(
-        endpoint_config(seed),
-        Some(server_config),
-        Arc::new(server_host),
-        quinn::default_runtime().unwrap(),
-    )
-    .context("failed to create server endpoint")
-}
-
-fn client_endpoint(
-    server_cert: CertificateDer<'_>,
-    client_host: HostHandle,
-    quinn_config: &QuinnJsonConfig,
-    quinn_rng: &mut Rng,
-) -> anyhow::Result<Endpoint> {
-    let mut seed = [0; 32];
-    quinn_rng.fill(&mut seed);
-
-    let mut endpoint = Endpoint::new_with_abstract_socket(
-        endpoint_config(seed),
-        None,
-        Arc::new(client_host),
-        quinn::default_runtime().unwrap(),
-    )
-    .context("failed to create client endpoint")?;
-
-    endpoint.set_default_client_config(client_config(server_cert, quinn_config)?);
-
-    Ok(endpoint)
+    result
 }
 
 fn endpoint_config(rng_seed: [u8; 32]) -> EndpointConfig {
     let mut config = EndpointConfig::default();
     config.rng_seed(Some(rng_seed));
-    config.cid_generator(|| Box::new(NoConnectionIdGenerator));
+
     config
-}
-
-fn client_config(
-    server_cert: CertificateDer<'_>,
-    quinn_config: &QuinnJsonConfig,
-) -> anyhow::Result<ClientConfig> {
-    let mut roots = RootCertStore::empty();
-    roots.add(server_cert)?;
-
-    let default_provider = rustls::crypto::ring::default_provider();
-    let provider = rustls::crypto::CryptoProvider {
-        cipher_suites: vec![rustls::crypto::ring::cipher_suite::TLS13_AES_128_GCM_SHA256],
-        ..default_provider
-    };
-
-    let mut crypto = rustls::ClientConfig::builder_with_provider(provider.into())
-        .with_protocol_versions(&[&rustls::version::TLS13])
-        .unwrap()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-
-    crypto.key_log = Arc::new(rustls::KeyLogFile::new());
-
-    let mut client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(crypto)?));
-    client_config.transport_config(Arc::new(transport_config(quinn_config)));
-
-    Ok(client_config)
 }
 
 fn transport_config(quinn_config: &QuinnJsonConfig) -> TransportConfig {

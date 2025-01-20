@@ -44,7 +44,7 @@ cargo run --release -- \
   --network-events test-data/earth-mars/events.json \
   --client-ip-address 192.168.40.1 \
   --server-ip-address 192.168.43.2 \
-  --repeat 1 --response-size 10485760
+  --requests 1 --response-size 10485760
 ```
 
 Here's an example controlling the random seeds (which otherwise use a hardcoded constant):
@@ -155,10 +155,20 @@ flags control other aspects of the simulation:
 --server-ip-address <SERVER_IP_ADDRESS>
     The IP address of the node used as a server
 
---repeat <REPEAT>
-    The amount of times the request should be repeated
+--requests <REQUESTS>
+    The number of requests that should be made
 
     [default: 10]
+
+--concurrent-connections <CONCURRENT_CONNECTIONS>
+    The number of concurrent connections used when making the requests
+
+    [default: 1]
+
+--concurrent-streams-per-connection <CONCURRENT_STREAMS_PER_CONNECTION>
+    The number of concurrent streams per connection used when making the requests
+
+    [default: 1]
 
 --response-size <RESPONSE_SIZE>
     The size of each response, in bytes
