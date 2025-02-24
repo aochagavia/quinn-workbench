@@ -5,9 +5,11 @@ use crate::tracing::simulation_step::{
     GenericPacketEvent, PacketDropped, SimulationStep, SimulationStepKind,
 };
 use crate::tracing::simulation_verifier::InvalidSimulation::PacketCreatedByRouterNode;
+use crate::tracing::simulation_verifier::replayed::ReplayedLink;
 use crate::tracing::stats::{NodeStats, PacketStats};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 use std::{cmp, mem};
 use thiserror::Error;
 use uuid::Uuid;
@@ -41,6 +43,13 @@ pub enum InvalidSimulation {
         node_id: Arc<str>,
         link_id: Arc<str>,
     },
+    #[error(
+        "network node `{node_id}` received a packet through link `{link_id}`, but said link became unavailable while the packet was in flight"
+    )]
+    InvalidPacketReceive {
+        node_id: Arc<str>,
+        link_id: Arc<str>,
+    },
 }
 
 #[derive(Default)]
@@ -51,7 +60,7 @@ pub struct SimulationVerifier {
     /// Map from link ids to their associated state
     links: HashMap<Arc<str>, ReplayedLink>,
     /// Map from packet ids to the links where they can be found
-    in_flight_packets: HashMap<Uuid, Arc<str>>,
+    in_flight_packets: HashMap<Uuid, InFlightPacket>,
     /// Ids of nodes considered to be hosts
     host_nodes: HashSet<Arc<str>>,
     /// Network events
@@ -88,7 +97,7 @@ impl SimulationVerifier {
         for (link_id, status) in events.initial_link_statuses {
             if let LinkStatus::Down { .. } = status {
                 if let Some(link) = replayed_links.get_mut(&link_id) {
-                    link.status = UpdateLinkStatus::Down;
+                    link.set_status(UpdateLinkStatus::Down, Duration::from_secs(0));
                 }
             }
         }
@@ -114,19 +123,16 @@ impl SimulationVerifier {
             loop {
                 match peekable_events.peek() {
                     Some(e) if e.relative_time <= next_step => {
-                        let link_id = e.payload.link_id.clone();
-                        let status_update = e.payload.status;
+                        // Update status if the link exists (we ignore updates for links that have
+                        // events but are not part of the network)
+                        if let Some(status) = e.payload.status {
+                            if let Some(link) = self.links.get_mut(&e.payload.link_id) {
+                                link.set_status(status, e.relative_time);
+                            }
+                        }
 
                         // Advance the iterator
                         peekable_events.next();
-
-                        // Update status if the link exists (we ignore updates for links that have
-                        // events but are not part of the network)
-                        if let Some(status) = status_update {
-                            if let Some(link) = self.links.get_mut(&link_id) {
-                                link.status = status;
-                            }
-                        }
                     }
                     _ => break,
                 }
@@ -134,9 +140,21 @@ impl SimulationVerifier {
 
             match &step.kind {
                 SimulationStepKind::PacketInNode(s) => {
-                    if let Some(_link) = self.in_flight_packets.remove(&s.packet_id) {
+                    if let Some(in_flight) = self.in_flight_packets.remove(&s.packet_id) {
                         // TODO 1: check that the link is actually connected to the target node (we already checked that the link is connected to the source, when sending)
-                        // TODO 2: check that the link didn't go down between the time of sending and the time of receiving (i.e. no up -> down -> up)
+
+                        // Check that the link didn't go down after sending (i.e. forbid up -> down -> up)
+                        let link = self.link(&in_flight.link_id)?;
+                        if link
+                            .last_down()
+                            .is_some_and(|timestamp| timestamp >= in_flight.sent_at_relative)
+                        {
+                            return Err(InvalidSimulation::InvalidPacketReceive {
+                                node_id: s.node_id.clone(),
+                                link_id: in_flight.link_id,
+                            });
+                        }
+
                         self.node(&s.node_id)?.packet_received(s)?;
                     } else {
                         // The packet was not in flight, so it must have just been created at
@@ -173,15 +191,20 @@ impl SimulationVerifier {
                     // TODO: check that the link is actually connected to the source node
                     // TODO: check that the link is not saturated
                     let link = self.link(&s.link_id)?;
-                    if let UpdateLinkStatus::Down = link.status {
+                    if !link.is_up() {
                         return Err(InvalidSimulation::InvalidPacketSend {
                             node_id: s.node_id.clone(),
                             link_id: s.link_id.clone(),
                         });
                     }
 
-                    self.in_flight_packets
-                        .insert(s.packet_id, s.link_id.clone());
+                    self.in_flight_packets.insert(
+                        s.packet_id,
+                        InFlightPacket {
+                            sent_at_relative: step.relative_time,
+                            link_id: s.link_id.clone(),
+                        },
+                    );
                 }
 
                 SimulationStepKind::PacketCongestionEvent(s) => {
@@ -337,20 +360,47 @@ impl ReplayedNode {
     }
 }
 
-struct ReplayedLink {
-    status: UpdateLinkStatus,
-}
+mod replayed {
+    use super::*;
 
-impl ReplayedLink {}
+    pub struct ReplayedLink {
+        status: UpdateLinkStatus,
+        last_down: Option<Duration>,
+    }
 
-impl Default for ReplayedLink {
-    fn default() -> Self {
-        Self {
-            status: UpdateLinkStatus::Up,
+    impl ReplayedLink {
+        pub fn is_up(&self) -> bool {
+            matches!(self.status, UpdateLinkStatus::Up)
+        }
+
+        pub fn last_down(&self) -> Option<Duration> {
+            self.last_down
+        }
+
+        pub fn set_status(&mut self, status: UpdateLinkStatus, timestamp: Duration) {
+            if let UpdateLinkStatus::Down = status {
+                self.last_down = Some(timestamp);
+            }
+
+            self.status = status;
+        }
+    }
+
+    impl Default for ReplayedLink {
+        fn default() -> Self {
+            Self {
+                status: UpdateLinkStatus::Up,
+                last_down: None,
+            }
         }
     }
 }
 
 struct ReplayedPacket {
     size_bytes: usize,
+}
+
+struct InFlightPacket {
+    sent_at_relative: Duration,
+    link_id: Arc<str>,
 }
