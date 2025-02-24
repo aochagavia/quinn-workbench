@@ -110,6 +110,7 @@ async fn run_and_report_stats(
     println!("--- Stats ---");
     let verified_simulation = tracer
         .verifier(network_events)
+        .context("failed to create simulation verifier")?
         .verify()
         .context("failed to verify simulation")?;
     let server_host = network.host(options.server_ip_address);

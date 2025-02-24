@@ -7,6 +7,7 @@ use crate::tracing::simulation_step::{
 use crate::tracing::simulation_verifier::InvalidSimulation::PacketCreatedByRouterNode;
 use crate::tracing::simulation_verifier::replayed::ReplayedLink;
 use crate::tracing::stats::{NodeStats, PacketStats};
+use anyhow::{anyhow, bail};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,9 +38,16 @@ pub enum InvalidSimulation {
     )]
     MissingLostPacket { packet_id: Uuid },
     #[error(
-        "network node `{node_id}` sent a packet through link `{link_id}`, but said link was unavailable at this point in time (it was either saturated, down, or not even connected to the source node)"
+        "network node `{node_id}` sent a packet through link `{link_id}`, but said link was unavailable at this point in time (it was either saturated or down)"
     )]
     InvalidPacketSend {
+        node_id: Arc<str>,
+        link_id: Arc<str>,
+    },
+    #[error(
+        "network node `{node_id}` sent a packet through link `{link_id}`, but according to the network graph the node is not connected to that link as a sender"
+    )]
+    DisconnectedPacketSend {
         node_id: Arc<str>,
         link_id: Arc<str>,
     },
@@ -47,6 +55,13 @@ pub enum InvalidSimulation {
         "network node `{node_id}` received a packet through link `{link_id}`, but said link became unavailable while the packet was in flight"
     )]
     InvalidPacketReceive {
+        node_id: Arc<str>,
+        link_id: Arc<str>,
+    },
+    #[error(
+        "network node `{node_id}` received a packet through link `{link_id}`, but according to the network graph the node is not connected to that link as a receiver"
+    )]
+    DisconnectedPacketReceive {
         node_id: Arc<str>,
         link_id: Arc<str>,
     },
@@ -65,6 +80,8 @@ pub struct SimulationVerifier {
     host_nodes: HashSet<Arc<str>>,
     /// Network events
     network_events: Vec<NetworkEvent>,
+    /// Map from links to their corresponding (source, target) node pairs
+    link_nodes: HashMap<Arc<str>, (Arc<str>, Arc<str>)>,
 }
 
 impl SimulationVerifier {
@@ -72,7 +89,7 @@ impl SimulationVerifier {
         mut steps: Vec<SimulationStep>,
         network_spec: &NetworkSpec,
         events: NetworkEvents,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         if !steps.is_sorted_by_key(|s| s.relative_time) {
             steps.sort_unstable_by_key(|s| s.relative_time);
         }
@@ -81,16 +98,37 @@ impl SimulationVerifier {
 
         let mut replayed_nodes = HashMap::new();
         let mut host_nodes = HashSet::new();
+        let mut ip_to_node = HashMap::new();
         for node in network_spec.nodes {
             let node_id: Arc<str> = node.id.clone().into();
             if let NodeKind::Host = node.kind {
                 host_nodes.insert(node_id.clone());
             }
+
+            for interface in &node.interfaces {
+                for addr in &interface.addresses {
+                    let existing = ip_to_node.insert(addr.as_ip_addr(), node_id.clone());
+                    match existing {
+                        Some(existing) if existing != node_id => {
+                            bail!(
+                                "address `{addr}` is mapped to at least two nodes: `{node_id}` and `{existing}`"
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
             replayed_nodes.insert(node_id, ReplayedNode::default());
         }
 
         let mut replayed_links = HashMap::new();
+        let mut link_nodes = HashMap::new();
         for link in network_spec.links {
+            let source_id = ip_to_node.get(&link.source).ok_or(anyhow!("no corresponding node found for link `{}` (source address `{}` is not used by any node)", link.id, link.source))?;
+            let target_id = ip_to_node.get(&link.target).ok_or(anyhow!("no corresponding node found for link `{}` (target address `{}` is not used by any node)", link.id, link.target))?;
+            link_nodes.insert(link.id.clone(), (source_id.clone(), target_id.clone()));
+
             replayed_links.insert(link.id, ReplayedLink::default());
         }
 
@@ -102,14 +140,15 @@ impl SimulationVerifier {
             }
         }
 
-        Self {
+        Ok(Self {
             steps,
             nodes: replayed_nodes,
             links: replayed_links,
             host_nodes,
+            link_nodes,
             network_events: events.sorted_events,
             ..Default::default()
-        }
+        })
     }
 
     pub fn verify(mut self) -> Result<VerifiedSimulation, InvalidSimulation> {
@@ -141,7 +180,14 @@ impl SimulationVerifier {
             match &step.kind {
                 SimulationStepKind::PacketInNode(s) => {
                     if let Some(in_flight) = self.in_flight_packets.remove(&s.packet_id) {
-                        // TODO 1: check that the link is actually connected to the target node (we already checked that the link is connected to the source, when sending)
+                        // Check that the link is actually connected to the target node
+                        let (_, target_node_id) = self.link_nodes.get(&in_flight.link_id).unwrap();
+                        if s.node_id.as_ref() != target_node_id.as_ref() {
+                            return Err(InvalidSimulation::DisconnectedPacketReceive {
+                                node_id: s.node_id.clone(),
+                                link_id: in_flight.link_id.clone(),
+                            });
+                        }
 
                         // Check that the link didn't go down after sending (i.e. forbid up -> down -> up)
                         let link = self.link(&in_flight.link_id)?;
@@ -188,8 +234,16 @@ impl SimulationVerifier {
                 SimulationStepKind::PacketInTransit(s) => {
                     self.node(&s.node_id)?.packet_sent(s.packet_id)?;
 
-                    // TODO: check that the link is actually connected to the source node
-                    // TODO: check that the link is not saturated
+                    // Check that the link is actually connected to the source node
+                    let (source_node_id, _) = self.link_nodes.get(&s.link_id).unwrap();
+                    if s.node_id.as_ref() != source_node_id.as_ref() {
+                        return Err(InvalidSimulation::DisconnectedPacketSend {
+                            node_id: s.node_id.clone(),
+                            link_id: s.link_id.clone(),
+                        });
+                    }
+
+                    // Check that the link is up
                     let link = self.link(&s.link_id)?;
                     if !link.is_up() {
                         return Err(InvalidSimulation::InvalidPacketSend {
@@ -197,6 +251,8 @@ impl SimulationVerifier {
                             link_id: s.link_id.clone(),
                         });
                     }
+
+                    // TODO: check that the link is not saturated
 
                     self.in_flight_packets.insert(
                         s.packet_id,

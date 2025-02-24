@@ -39,7 +39,7 @@ impl SimulationStepTracer {
         self.recorded_steps.lock().clone()
     }
 
-    pub fn verifier(&self, events: NetworkEvents) -> SimulationVerifier {
+    pub fn verifier(&self, events: NetworkEvents) -> anyhow::Result<SimulationVerifier> {
         let steps = self.recorded_steps.lock().clone().steps();
         SimulationVerifier::new(steps, &self.network_spec, events)
     }
