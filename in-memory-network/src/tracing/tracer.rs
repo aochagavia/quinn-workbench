@@ -1,14 +1,15 @@
 use crate::InTransitData;
+use crate::network::event::NetworkEvents;
 use crate::network::link::NetworkLink;
 use crate::network::node::Node;
-use crate::network::spec::{NetworkNodeSpec, NetworkSpec};
+use crate::network::spec::NetworkSpec;
 use crate::pcap_exporter::PcapExporter;
 use crate::tracing::simulation_step::{
     GenericPacketEvent, PacketDropped, PacketHasExtraDelay, PacketInTransit, PacketLostInTransit,
     SimulationStep, SimulationStepKind,
 };
 use crate::tracing::simulation_stepper::SimulationStepper;
-use crate::tracing::stats::NetworkStats;
+use crate::tracing::simulation_verifier::SimulationVerifier;
 use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -18,8 +19,8 @@ use tokio::time::Instant;
 pub struct SimulationStepTracer {
     simulation_start: Instant,
     pcap_exporter: Arc<PcapExporter>,
-    recorded_steps: Mutex<Vec<SimulationStep>>,
-    nodes: Vec<NetworkNodeSpec>,
+    recorded_steps: Mutex<SimulationStepper>,
+    network_spec: NetworkSpec,
     already_warned_dropped_from_buffer: Mutex<HashSet<Arc<str>>>,
 }
 
@@ -29,28 +30,22 @@ impl SimulationStepTracer {
             simulation_start: Instant::now(),
             pcap_exporter,
             recorded_steps: Default::default(),
-            nodes: spec.nodes,
+            network_spec: spec,
             already_warned_dropped_from_buffer: Mutex::default(),
         }
     }
 
-    pub fn steps(&self) -> Vec<SimulationStep> {
+    pub fn stepper(&self) -> SimulationStepper {
         self.recorded_steps.lock().clone()
     }
 
-    pub fn stats(&self) -> NetworkStats {
-        NetworkStats {
-            by_node: self.stepper().simulate(),
-        }
-    }
-
-    pub fn stepper(&self) -> SimulationStepper {
-        let steps = self.recorded_steps.lock().clone();
-        SimulationStepper::new(steps, &self.nodes)
+    pub fn verifier(&self, events: NetworkEvents) -> SimulationVerifier {
+        let steps = self.recorded_steps.lock().clone().steps();
+        SimulationVerifier::new(steps, &self.network_spec, events)
     }
 
     fn record(&self, kind: SimulationStepKind) {
-        self.recorded_steps.lock().push(SimulationStep {
+        self.recorded_steps.lock().record(SimulationStep {
             relative_time: self.simulation_start.elapsed(),
             kind,
         });

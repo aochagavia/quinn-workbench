@@ -133,7 +133,7 @@ impl From<NetworkSpecJson> for in_memory_network::network::spec::NetworkSpec {
 impl From<NetworkLinkJson> for in_memory_network::network::spec::NetworkLinkSpec {
     fn from(l: NetworkLinkJson) -> Self {
         in_memory_network::network::spec::NetworkLinkSpec {
-            id: l.id.into_boxed_str().into(),
+            id: l.id.into(),
             source: l.source,
             target: l.target,
             delay: Duration::from_millis(l.delay_ms),
@@ -171,7 +171,7 @@ impl From<NetworkEventJson> for NetworkEvent {
         NetworkEvent {
             relative_time: Duration::from_millis(json.relative_time_ms),
             payload: NetworkEventPayload {
-                link_id: json.link.id,
+                link_id: json.link.id.into(),
                 status: json.link.status.map(|s| match s {
                     NetworkLinkStatusJson::Up => UpdateLinkStatus::Up,
                     NetworkLinkStatusJson::Down => UpdateLinkStatus::Down,

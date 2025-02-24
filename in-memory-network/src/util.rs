@@ -34,7 +34,7 @@ pub mod serde_arc_str {
             where
                 E: Error,
             {
-                Ok(v.into_boxed_str().into())
+                Ok(v.into())
             }
         }
 

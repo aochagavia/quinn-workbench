@@ -154,7 +154,7 @@ impl InMemoryNetwork {
             }
 
             let router = Arc::new(Router {
-                id: Arc::from(r.id.into_boxed_str()),
+                id: r.id.into(),
                 addresses: addresses.clone(),
                 outbound_buffer: Arc::new(OutboundBuffer::new(r.buffer_size_bytes as usize)),
             });
@@ -238,7 +238,7 @@ impl InMemoryNetwork {
                     );
                 }
 
-                let Some(link) = network_clone.links_by_id.get(id.as_str()) else {
+                let Some(link) = network_clone.links_by_id.get(&id) else {
                     println!("WARN: skipping received event for link that doesn't exist ({id})");
                     continue;
                 };
@@ -399,8 +399,7 @@ impl InMemoryNetwork {
         self.tracer.track_packet_in_node(&current_node, &data);
 
         let Some(link) = self.resolve_link(&current_node, &data) else {
-            let stepper = self.tracer.stepper();
-            let nodes: Vec<_> = stepper.get_packet_path(data.id);
+            let nodes = self.tracer.stepper().get_packet_path(data.id);
             let mut path = nodes.join(" -> ");
             path.push_str(" -> ?");
 

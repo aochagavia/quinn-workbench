@@ -1,10 +1,11 @@
 use crate::network::link::LinkStatus;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub struct NetworkEvents {
     pub(crate) sorted_events: Vec<NetworkEvent>,
-    pub(crate) initial_link_statuses: HashMap<String, LinkStatus>,
+    pub(crate) initial_link_statuses: HashMap<Arc<str>, LinkStatus>,
 }
 
 impl NetworkEvents {
@@ -30,7 +31,7 @@ impl NetworkEvent {
 }
 
 pub struct NetworkEventPayload {
-    pub link_id: String,
+    pub link_id: Arc<str>,
     pub status: Option<UpdateLinkStatus>,
     pub bandwidth_bps: Option<u64>,
     pub delay: Option<Duration>,
@@ -49,7 +50,7 @@ pub enum UpdateLinkStatus {
 
 fn get_initial_status_for_links_with_events(
     sorted_events: &[NetworkEvent],
-) -> HashMap<String, LinkStatus> {
+) -> HashMap<Arc<str>, LinkStatus> {
     let mut initial_link_statuses = HashMap::new();
     for event in sorted_events {
         if let Some(updated_status) = event.updated_status() {

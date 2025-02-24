@@ -10,6 +10,7 @@ use anyhow::Context;
 use clap::Parser;
 use config::cli::CliOpt;
 use config::quinn::QuinnJsonConfig;
+use in_memory_network::network::event::NetworkEvents;
 use in_memory_network::pcap_exporter::PcapExporter;
 use quinn::{EndpointConfig, TransportConfig, VarInt};
 use quinn_extensions::ecn_cc::EcnCcFactory;
@@ -82,6 +83,16 @@ async fn run_and_report_stats(
     config: SimulationConfig,
     pcap_exporter: Arc<PcapExporter>,
 ) -> anyhow::Result<()> {
+    // Duplicate events for later use with the verifier
+    let network_events = NetworkEvents::new(
+        config
+            .network_events
+            .clone()
+            .into_iter()
+            .map(|e| e.into())
+            .collect(),
+    );
+
     let mut simulation = Simulation::new();
     let result = simulation.run(options, config, pcap_exporter.clone()).await;
 
@@ -92,12 +103,15 @@ async fn run_and_report_stats(
 
     println!("--- Replay log ---");
     let replay_log_path = "replay-log.json";
-    let json_steps = serde_json::to_vec_pretty(&tracer.steps()).unwrap();
+    let json_steps = serde_json::to_vec_pretty(&tracer.stepper().steps()).unwrap();
     fs::write(replay_log_path, json_steps).context("failed to store replay log")?;
     println!("* Replay log available at {replay_log_path}");
 
     println!("--- Stats ---");
-    let stats = tracer.stats();
+    let verified_simulation = tracer
+        .verifier(network_events)
+        .verify()
+        .context("failed to verify simulation")?;
     let server_host = network.host(options.server_ip_address);
     let client_host = network.host(options.client_ip_address);
     for node in ["client", "server"] {
@@ -106,7 +120,7 @@ async fn run_and_report_stats(
             "client" => &network.host(client_host.addr.ip()).id,
             _ => unreachable!(),
         };
-        let stats = &stats.by_node[name];
+        let stats = &verified_simulation.stats_by_node[name];
 
         println!("* {name} ({node})");
 
@@ -138,7 +152,7 @@ async fn run_and_report_stats(
     }
 
     println!("--- Max buffer usage per node ---");
-    let mut buffer_usage: Vec<_> = stats.by_node.iter().collect();
+    let mut buffer_usage: Vec<_> = verified_simulation.stats_by_node.iter().collect();
     buffer_usage.sort_unstable_by_key(|tup| tup.1.max_buffer_usage);
     for (node_id, stats) in buffer_usage.into_iter().rev() {
         println!(

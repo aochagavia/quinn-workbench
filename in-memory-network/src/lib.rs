@@ -472,7 +472,7 @@ mod test {
                 NetworkEvent {
                     relative_time: Duration::from_secs(0),
                     payload: NetworkEventPayload {
-                        link_id: "router2-router1".to_string(),
+                        link_id: "router2-router1".into(),
                         status: Some(UpdateLinkStatus::Down),
                         bandwidth_bps: None,
                         delay: None,
@@ -486,7 +486,7 @@ mod test {
                 NetworkEvent {
                     relative_time: Duration::from_secs(10),
                     payload: NetworkEventPayload {
-                        link_id: "router2-router1".to_string(),
+                        link_id: "router2-router1".into(),
                         status: Some(UpdateLinkStatus::Up),
                         bandwidth_bps: None,
                         delay: None,
