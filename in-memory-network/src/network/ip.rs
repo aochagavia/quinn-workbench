@@ -10,6 +10,14 @@ pub struct Ipv4Cidr {
 }
 
 impl Ipv4Cidr {
+    #[cfg(test)]
+    pub const fn from_ipv4(address: Ipv4Addr, network_prefix: u8) -> Self {
+        Self {
+            address,
+            network_prefix,
+        }
+    }
+
     pub(crate) fn as_ip_addr(&self) -> IpAddr {
         IpAddr::V4(self.address)
     }

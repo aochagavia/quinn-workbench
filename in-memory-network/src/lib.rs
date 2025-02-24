@@ -39,7 +39,10 @@ pub struct InTransitData {
 mod test {
     use super::*;
     use crate::network::InMemoryNetwork;
-    use crate::network::event::{NetworkEvent, NetworkEventPayload, UpdateLinkStatus};
+    use crate::network::event::{
+        NetworkEvent, NetworkEventPayload, NetworkEvents, UpdateLinkStatus,
+    };
+    use crate::network::ip::Ipv4Cidr;
     use crate::network::node::{HostHandle, Node};
     use crate::network::route::{IpRange, Route};
     use crate::network::spec::{
@@ -57,17 +60,17 @@ mod test {
     use std::future::Future;
     use std::io;
     use std::io::IoSliceMut;
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::net::Ipv4Addr;
     use std::pin::Pin;
     use std::sync::Arc;
     use std::task::{Context, Poll};
     use std::time::Duration;
     use tokio::time::Instant;
 
-    const SERVER_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(88, 88, 88, 88));
-    const ROUTER1_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(200, 200, 200, 1));
-    const ROUTER2_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(200, 200, 200, 2));
-    const CLIENT_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1));
+    const SERVER_ADDR: Ipv4Cidr = Ipv4Cidr::from_ipv4(Ipv4Addr::new(88, 88, 88, 88), 24);
+    const ROUTER1_ADDR: Ipv4Cidr = Ipv4Cidr::from_ipv4(Ipv4Addr::new(200, 200, 200, 1), 24);
+    const ROUTER2_ADDR: Ipv4Cidr = Ipv4Cidr::from_ipv4(Ipv4Addr::new(200, 200, 200, 2), 24);
+    const CLIENT_ADDR: Ipv4Cidr = Ipv4Cidr::from_ipv4(Ipv4Addr::new(1, 1, 1, 1), 24);
     const BANDWIDTH_100_MBPS: u64 = 1000 * 1000 * 100;
     const BANDWIDTH_8_KBPS: u64 = 1000 * 8;
 
@@ -79,14 +82,10 @@ mod test {
         let bandwidth_bps = bandwidth_bps.unwrap_or(BANDWIDTH_100_MBPS);
 
         let default_link_delay = Duration::from_millis(10);
-        let client_cidr = IpRange {
-            start: CLIENT_ADDR,
-            end_inclusive: CLIENT_ADDR,
-        };
-        let server_cidr = IpRange {
-            start: SERVER_ADDR,
-            end_inclusive: SERVER_ADDR,
-        };
+        let client_cidr = IpRange::from_cidr(CLIENT_ADDR);
+        let server_cidr = IpRange::from_cidr(SERVER_ADDR);
+
+        // SERVER_ADDR -> ROUTER1_ADDR
 
         let network_spec = NetworkSpec {
             nodes: vec![
@@ -95,63 +94,73 @@ mod test {
                     kind: NodeKind::Host,
                     interfaces: vec![NetworkInterface {
                         addresses: vec![SERVER_ADDR],
+                        routes: vec![Route {
+                            destination: client_cidr.clone(),
+                            next: ROUTER1_ADDR.as_ip_addr(),
+                            cost: 0,
+                        }],
                     }],
-                    routes: vec![Route {
-                        destination: client_cidr.clone(),
-                        next: ROUTER1_ADDR,
-                    }],
+                    buffer_size_bytes: u64::MAX,
                 },
                 NetworkNodeSpec {
                     id: "client".to_string(),
                     kind: NodeKind::Host,
                     interfaces: vec![NetworkInterface {
                         addresses: vec![CLIENT_ADDR],
+                        routes: vec![Route {
+                            destination: server_cidr.clone(),
+                            next: ROUTER2_ADDR.as_ip_addr(),
+                            cost: 0,
+                        }],
                     }],
-                    routes: vec![Route {
-                        destination: server_cidr.clone(),
-                        next: ROUTER2_ADDR,
-                    }],
+                    buffer_size_bytes: u64::MAX,
                 },
                 NetworkNodeSpec {
                     id: "router1".to_string(),
                     kind: NodeKind::Router,
                     interfaces: vec![NetworkInterface {
                         addresses: vec![ROUTER1_ADDR],
+                        routes: vec![
+                            Route {
+                                destination: client_cidr.clone(),
+                                next: ROUTER2_ADDR.as_ip_addr(),
+                                cost: 0,
+                            },
+                            Route {
+                                destination: server_cidr.clone(),
+                                next: SERVER_ADDR.as_ip_addr(),
+                                cost: 0,
+                            },
+                        ],
                     }],
-                    routes: vec![
-                        Route {
-                            destination: client_cidr.clone(),
-                            next: ROUTER2_ADDR,
-                        },
-                        Route {
-                            destination: server_cidr.clone(),
-                            next: SERVER_ADDR,
-                        },
-                    ],
+                    buffer_size_bytes: u64::MAX,
                 },
                 NetworkNodeSpec {
                     id: "router2".to_string(),
                     kind: NodeKind::Router,
                     interfaces: vec![NetworkInterface {
                         addresses: vec![ROUTER2_ADDR],
+                        routes: vec![
+                            Route {
+                                destination: client_cidr.clone(),
+                                next: CLIENT_ADDR.as_ip_addr(),
+                                cost: 0,
+                            },
+                            Route {
+                                destination: server_cidr.clone(),
+                                next: ROUTER1_ADDR.as_ip_addr(),
+                                cost: 0,
+                            },
+                        ],
                     }],
-                    routes: vec![
-                        Route {
-                            destination: client_cidr.clone(),
-                            next: CLIENT_ADDR,
-                        },
-                        Route {
-                            destination: server_cidr.clone(),
-                            next: ROUTER1_ADDR,
-                        },
-                    ],
+                    buffer_size_bytes: u64::MAX,
                 },
             ],
             links: vec![
                 NetworkLinkSpec {
                     id: "server-router1".to_string().into_boxed_str().into(),
-                    source: SERVER_ADDR,
-                    target: ROUTER1_ADDR,
+                    source: SERVER_ADDR.as_ip_addr(),
+                    target: ROUTER1_ADDR.as_ip_addr(),
                     delay: default_link_delay,
                     bandwidth_bps: BANDWIDTH_100_MBPS,
                     congestion_event_ratio: 0.0,
@@ -162,8 +171,8 @@ mod test {
                 },
                 NetworkLinkSpec {
                     id: "router1-router2".to_string().into_boxed_str().into(),
-                    source: ROUTER1_ADDR,
-                    target: ROUTER2_ADDR,
+                    source: ROUTER1_ADDR.as_ip_addr(),
+                    target: ROUTER2_ADDR.as_ip_addr(),
                     delay: default_link_delay,
                     bandwidth_bps,
                     congestion_event_ratio: 0.0,
@@ -174,8 +183,8 @@ mod test {
                 },
                 NetworkLinkSpec {
                     id: "router2-client".to_string().into_boxed_str().into(),
-                    source: ROUTER2_ADDR,
-                    target: CLIENT_ADDR,
+                    source: ROUTER2_ADDR.as_ip_addr(),
+                    target: CLIENT_ADDR.as_ip_addr(),
                     delay: default_link_delay,
                     bandwidth_bps,
                     congestion_event_ratio: 0.0,
@@ -186,8 +195,8 @@ mod test {
                 },
                 NetworkLinkSpec {
                     id: "router1-server".to_string().into_boxed_str().into(),
-                    source: ROUTER1_ADDR,
-                    target: SERVER_ADDR,
+                    source: ROUTER1_ADDR.as_ip_addr(),
+                    target: SERVER_ADDR.as_ip_addr(),
                     delay: default_link_delay,
                     bandwidth_bps,
                     congestion_event_ratio: 0.0,
@@ -198,8 +207,8 @@ mod test {
                 },
                 NetworkLinkSpec {
                     id: "router2-router1".to_string().into_boxed_str().into(),
-                    source: ROUTER2_ADDR,
-                    target: ROUTER1_ADDR,
+                    source: ROUTER2_ADDR.as_ip_addr(),
+                    target: ROUTER1_ADDR.as_ip_addr(),
                     delay: default_link_delay,
                     bandwidth_bps,
                     congestion_event_ratio: 0.0,
@@ -210,8 +219,8 @@ mod test {
                 },
                 NetworkLinkSpec {
                     id: "client-router2".to_string().into_boxed_str().into(),
-                    source: CLIENT_ADDR,
-                    target: ROUTER2_ADDR,
+                    source: CLIENT_ADDR.as_ip_addr(),
+                    target: ROUTER2_ADDR.as_ip_addr(),
                     delay: default_link_delay,
                     bandwidth_bps: BANDWIDTH_100_MBPS,
                     congestion_event_ratio: 0.0,
@@ -225,9 +234,9 @@ mod test {
 
         InMemoryNetwork::initialize(
             network_spec.clone(),
-            events.unwrap_or_default(),
+            NetworkEvents::new(events.unwrap_or_default()),
             Arc::new(SimulationStepTracer::new(
-                Arc::new(PcapExporter::new()),
+                Arc::new(PcapExporter::new(io::sink())),
                 network_spec,
             )),
             Rng::with_seed(42),
@@ -271,9 +280,8 @@ mod test {
 
         // Network
         let network = default_network().call();
-        let server_socket = Arc::new(network.host_a_handle());
-        let client_socket = Arc::new(network.host_b_handle());
-        let server_addr = server_socket.addr();
+        let server_socket = Arc::new(network.host(SERVER_ADDR.as_ip_addr()));
+        let client_socket = Arc::new(network.host(CLIENT_ADDR.as_ip_addr()));
 
         // QUIC config
         let (server_name, server_cert, server_config) = default_server_config();
@@ -283,13 +291,17 @@ mod test {
         let server_endpoint = Endpoint::new_with_abstract_socket(
             EndpointConfig::default(),
             Some(server_config),
-            server_socket,
+            Arc::new(network.host_handle((*server_socket).clone())),
             rt.clone(),
         )
         .unwrap();
-        let mut client_endpoint =
-            Endpoint::new_with_abstract_socket(EndpointConfig::default(), None, client_socket, rt)
-                .unwrap();
+        let mut client_endpoint = Endpoint::new_with_abstract_socket(
+            EndpointConfig::default(),
+            None,
+            Arc::new(network.host_handle((*client_socket).clone())),
+            rt,
+        )
+        .unwrap();
         client_endpoint.set_default_client_config(client_config);
 
         // Run server in the background
@@ -307,7 +319,7 @@ mod test {
 
         // Make a request from the client
         let client_conn = client_endpoint
-            .connect(server_addr, server_name)
+            .connect(server_socket.addr, server_name)
             .unwrap()
             .await
             .unwrap();
@@ -326,25 +338,33 @@ mod test {
     async fn test_packet_arrives_at_expected_time() {
         // Sanity check
         let network = default_network().call();
-        network.assert_connectivity_between_hosts().await.unwrap();
+        let server_socket = Arc::new(network.host(SERVER_ADDR.as_ip_addr()));
+        let client_socket = Arc::new(network.host(CLIENT_ADDR.as_ip_addr()));
+        network
+            .assert_connectivity_between_hosts(server_socket.addr.ip(), client_socket.addr.ip())
+            .await
+            .unwrap();
 
+        // Test
         let network = default_network().call();
+        let server_socket = Arc::new(network.host(SERVER_ADDR.as_ip_addr()));
+        let client_socket = Arc::new(network.host(CLIENT_ADDR.as_ip_addr()));
         let data = network.in_transit_data(
-            network.host_b().clone(),
+            (*client_socket).clone(),
             OwnedTransmit {
-                destination: network.host_a_handle().addr(),
+                destination: server_socket.addr,
                 ecn: None,
                 contents: b"hello world".to_vec(),
                 segment_size: None,
             },
         );
         let packet_id = data.id;
-        network.forward(Node::Host(network.host_b.clone()), data);
+        network.forward(Node::Host((*client_socket).clone()), data);
 
         let mut recv_result = BufsAndMeta::new();
         let received = {
             let host_receive = HostReceive {
-                host_handle: network.host_a_handle(),
+                host_handle: network.host_handle((*server_socket).clone()),
                 result: &mut recv_result,
             };
             host_receive.await.unwrap()
@@ -383,16 +403,24 @@ mod test {
         for (bandwidth, expected_delay) in bandwidths_and_delays {
             // Sanity check
             let network = default_network().bandwidth_bps(bandwidth).call();
-            network.assert_connectivity_between_hosts().await.unwrap();
+            let server_socket = Arc::new(network.host(SERVER_ADDR.as_ip_addr()));
+            let client_socket = Arc::new(network.host(CLIENT_ADDR.as_ip_addr()));
+            network
+                .assert_connectivity_between_hosts(client_socket.addr.ip(), server_socket.addr.ip())
+                .await
+                .unwrap();
 
+            // Actual test
             let network = default_network().bandwidth_bps(bandwidth).call();
+            let server_socket = Arc::new(network.host(SERVER_ADDR.as_ip_addr()));
+            let client_socket = Arc::new(network.host(CLIENT_ADDR.as_ip_addr()));
 
             let mut packet_ids = Vec::new();
             for _ in 0..4 {
                 let data = network.in_transit_data(
-                    network.host_b().clone(),
+                    (*client_socket).clone(),
                     OwnedTransmit {
-                        destination: network.host_a_handle().addr(),
+                        destination: network.host_handle((*server_socket).clone()).addr(),
                         ecn: None,
                         contents: vec![42; 1200],
                         segment_size: None,
@@ -400,7 +428,7 @@ mod test {
                 );
 
                 packet_ids.push(data.id);
-                network.forward(Node::Host(network.host_b.clone()), data.clone());
+                network.forward(Node::Host((*client_socket).clone()), data.clone());
             }
 
             let mut received = 0;
@@ -408,7 +436,7 @@ mod test {
                 let mut recv_result = BufsAndMeta::new();
                 received += {
                     let host_receive = HostReceive {
-                        host_handle: network.host_a_handle(),
+                        host_handle: network.host_handle((*server_socket).clone()),
                         result: &mut recv_result,
                     };
 
@@ -425,7 +453,7 @@ mod test {
 
             let mut arrival_times = Vec::new();
             for packet_id in packet_ids {
-                let packet_arrived = stepper.get_packet_arrived_at(packet_id, &network.host_a.id);
+                let packet_arrived = stepper.get_packet_arrived_at(packet_id, &server_socket.id);
                 arrival_times.push(packet_arrived.unwrap());
             }
 
@@ -472,10 +500,13 @@ mod test {
             ])
             .call();
 
+        let server_socket = Arc::new(network.host(SERVER_ADDR.as_ip_addr()));
+        let client_socket = Arc::new(network.host(CLIENT_ADDR.as_ip_addr()));
+
         let data = network.in_transit_data(
-            network.host_b().clone(),
+            (*client_socket).clone(),
             OwnedTransmit {
-                destination: network.host_a_handle().addr(),
+                destination: network.host_handle((*server_socket).clone()).host.addr,
                 ecn: None,
                 contents: vec![42; 1200],
                 segment_size: None,
@@ -483,11 +514,11 @@ mod test {
         );
         let packet_id = data.id;
 
-        network.forward(Node::Host(network.host_b.clone()), data.clone());
+        network.forward(Node::Host((*client_socket).clone()), data.clone());
         let mut recv_result = BufsAndMeta::new();
         let received = {
             let host_receive = HostReceive {
-                host_handle: network.host_a_handle(),
+                host_handle: network.host_handle((*server_socket).clone()),
                 result: &mut recv_result,
             };
 
