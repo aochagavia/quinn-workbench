@@ -54,7 +54,7 @@ pub enum InvalidSimulation {
     #[error(
         "network node `{node_id}` received a packet through link `{link_id}`, but said link became unavailable while the packet was in flight"
     )]
-    InvalidPacketReceive {
+    OfflinePacketReceive {
         node_id: Arc<str>,
         link_id: Arc<str>,
     },
@@ -62,6 +62,13 @@ pub enum InvalidSimulation {
         "network node `{node_id}` received a packet through link `{link_id}`, but according to the network graph the node is not connected to that link as a receiver"
     )]
     DisconnectedPacketReceive {
+        node_id: Arc<str>,
+        link_id: Arc<str>,
+    },
+    #[error(
+        "network node `{node_id}` received a packet through link `{link_id}` faster than the link's delay allows"
+    )]
+    TooFastPacketReceive {
         node_id: Arc<str>,
         link_id: Arc<str>,
     },
@@ -80,8 +87,8 @@ pub struct SimulationVerifier {
     host_nodes: HashSet<Arc<str>>,
     /// Network events
     network_events: Vec<NetworkEvent>,
-    /// Map from links to their corresponding (source, target) node pairs
-    link_nodes: HashMap<Arc<str>, (Arc<str>, Arc<str>)>,
+    /// Map from links to metadata useful for verification
+    link_metadata: HashMap<Arc<str>, LinkMetadata>,
 }
 
 impl SimulationVerifier {
@@ -123,11 +130,18 @@ impl SimulationVerifier {
         }
 
         let mut replayed_links = HashMap::new();
-        let mut link_nodes = HashMap::new();
+        let mut link_metadata = HashMap::new();
         for link in network_spec.links {
             let source_id = ip_to_node.get(&link.source).ok_or(anyhow!("no corresponding node found for link `{}` (source address `{}` is not used by any node)", link.id, link.source))?;
             let target_id = ip_to_node.get(&link.target).ok_or(anyhow!("no corresponding node found for link `{}` (target address `{}` is not used by any node)", link.id, link.target))?;
-            link_nodes.insert(link.id.clone(), (source_id.clone(), target_id.clone()));
+            link_metadata.insert(
+                link.id.clone(),
+                LinkMetadata {
+                    source_node_id: source_id.clone(),
+                    target_node_id: target_id.clone(),
+                    delay: link.delay,
+                },
+            );
 
             replayed_links.insert(link.id, ReplayedLink::default());
         }
@@ -145,7 +159,7 @@ impl SimulationVerifier {
             nodes: replayed_nodes,
             links: replayed_links,
             host_nodes,
-            link_nodes,
+            link_metadata,
             network_events: events.sorted_events,
             ..Default::default()
         })
@@ -181,11 +195,20 @@ impl SimulationVerifier {
                 SimulationStepKind::PacketInNode(s) => {
                     if let Some(in_flight) = self.in_flight_packets.remove(&s.packet_id) {
                         // Check that the link is actually connected to the target node
-                        let (_, target_node_id) = self.link_nodes.get(&in_flight.link_id).unwrap();
-                        if s.node_id.as_ref() != target_node_id.as_ref() {
+                        let link_metadata = self.link_metadata.get(&in_flight.link_id).unwrap();
+                        if s.node_id != link_metadata.target_node_id {
                             return Err(InvalidSimulation::DisconnectedPacketReceive {
                                 node_id: s.node_id.clone(),
                                 link_id: in_flight.link_id.clone(),
+                            });
+                        }
+
+                        // Check that transmission took enough time
+                        let time_in_flight = step.relative_time - in_flight.sent_at_relative;
+                        if time_in_flight < link_metadata.delay {
+                            return Err(InvalidSimulation::TooFastPacketReceive {
+                                node_id: s.node_id.clone(),
+                                link_id: in_flight.link_id,
                             });
                         }
 
@@ -195,9 +218,9 @@ impl SimulationVerifier {
                             .last_down()
                             .is_some_and(|timestamp| timestamp >= in_flight.sent_at_relative)
                         {
-                            return Err(InvalidSimulation::InvalidPacketReceive {
+                            return Err(InvalidSimulation::OfflinePacketReceive {
                                 node_id: s.node_id.clone(),
-                                link_id: in_flight.link_id,
+                                link_id: in_flight.link_id.clone(),
                             });
                         }
 
@@ -235,8 +258,12 @@ impl SimulationVerifier {
                     self.node(&s.node_id)?.packet_sent(s.packet_id)?;
 
                     // Check that the link is actually connected to the source node
-                    let (source_node_id, _) = self.link_nodes.get(&s.link_id).unwrap();
-                    if s.node_id.as_ref() != source_node_id.as_ref() {
+                    let link_metadata = self.link_metadata.get(&s.link_id).ok_or(
+                        InvalidSimulation::MissingLink {
+                            link_id: s.link_id.clone(),
+                        },
+                    )?;
+                    if s.node_id != link_metadata.source_node_id {
                         return Err(InvalidSimulation::DisconnectedPacketSend {
                             node_id: s.node_id.clone(),
                             link_id: s.link_id.clone(),
@@ -459,4 +486,10 @@ struct ReplayedPacket {
 struct InFlightPacket {
     sent_at_relative: Duration,
     link_id: Arc<str>,
+}
+
+struct LinkMetadata {
+    source_node_id: Arc<str>,
+    target_node_id: Arc<str>,
+    delay: Duration,
 }
