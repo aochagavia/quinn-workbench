@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, DisplayFromStr, DurationNanoSeconds};
+use serde_with::{DisplayFromStr, DurationNanoSeconds, serde_as};
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;

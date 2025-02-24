@@ -1,11 +1,11 @@
-use crate::config::cli::CliOpt;
 use crate::config::SimulationConfig;
+use crate::config::cli::CliOpt;
 use crate::{client, server};
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use fastrand::Rng;
+use in_memory_network::network::InMemoryNetwork;
 use in_memory_network::network::event::NetworkEvents;
 use in_memory_network::network::spec::NetworkSpec;
-use in_memory_network::network::InMemoryNetwork;
 use in_memory_network::pcap_exporter::PcapExporter;
 use in_memory_network::tracing::tracer::SimulationStepTracer;
 use parking_lot::Mutex;
@@ -143,7 +143,10 @@ impl Simulation {
 
         let max_connections = b'Z' - b'A';
         if options.concurrent_connections > max_connections {
-            bail!("The maximum number of concurrent connections is {max_connections}, but {} were configured", options.concurrent_connections);
+            bail!(
+                "The maximum number of concurrent connections is {max_connections}, but {} were configured",
+                options.concurrent_connections
+            );
         }
 
         // Make requests, potentially using concurrent connections

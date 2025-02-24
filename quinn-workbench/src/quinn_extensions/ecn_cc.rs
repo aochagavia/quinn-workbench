@@ -1,5 +1,5 @@
-use quinn_proto::congestion::{Controller, ControllerFactory};
 use quinn_proto::RttEstimator;
+use quinn_proto::congestion::{Controller, ControllerFactory};
 use std::any::Any;
 use std::sync::Arc;
 use std::time::Instant;

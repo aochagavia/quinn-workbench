@@ -17,7 +17,7 @@ use crate::network::node::{Host, HostHandle, Node};
 use crate::network::outbound_buffer::OutboundBuffer;
 use crate::network::spec::{NetworkSpec, NodeKind};
 use crate::tracing::tracer::SimulationStepTracer;
-use crate::{InTransitData, OwnedTransmit, HOST_PORT};
+use crate::{HOST_PORT, InTransitData, OwnedTransmit};
 use anyhow::bail;
 use fastrand::Rng;
 use link::NetworkLink;
@@ -27,8 +27,8 @@ use quinn::udp::EcnCodepoint;
 use route::Route;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -95,9 +95,9 @@ impl InMemoryNetwork {
 
             if let Some(host) = already_existing {
                 bail!(
-                "Expected hosts to have unique ip addresses, but at least two hosts are using {}",
-                host.addr.ip()
-            );
+                    "Expected hosts to have unique ip addresses, but at least two hosts are using {}",
+                    host.addr.ip()
+                );
             }
         }
 
@@ -221,7 +221,9 @@ impl InMemoryNetwork {
                 }
 
                 if packet_duplication_ratio.is_some() {
-                    println!("WARN: changing the packet duplication ratio in events is currently unsupported");
+                    println!(
+                        "WARN: changing the packet duplication ratio in events is currently unsupported"
+                    );
                 }
 
                 if packet_loss_ratio.is_some() {
@@ -231,7 +233,9 @@ impl InMemoryNetwork {
                 }
 
                 if congestion_event_ratio.is_some() {
-                    println!("WARN: changing the congestion event ratio in events is currently unsupported");
+                    println!(
+                        "WARN: changing the congestion event ratio in events is currently unsupported"
+                    );
                 }
 
                 let Some(link) = network_clone.links_by_id.get(id.as_str()) else {
@@ -305,7 +309,11 @@ impl InMemoryNetwork {
 
         if a_to_b_failed || b_to_a_failed {
             let report = |failed| if failed { "failed" } else { "succeeded" };
-            bail!("failed to deliver packets between the hosts after {days} days (A to B {}, B to A {})", report(a_to_b_failed), report(b_to_a_failed));
+            bail!(
+                "failed to deliver packets between the hosts after {days} days (A to B {}, B to A {})",
+                report(a_to_b_failed),
+                report(b_to_a_failed)
+            );
         }
 
         let stepper = self.tracer.stepper();
@@ -433,10 +441,11 @@ impl InMemoryNetwork {
 
         if congestion_experienced {
             // The Quinn-provided transmit must indicate support for ECN
-            assert!(data
-                .transmit
-                .ecn
-                .is_some_and(|codepoint| codepoint as u8 == 0b10 || codepoint as u8 == 0b01));
+            assert!(
+                data.transmit
+                    .ecn
+                    .is_some_and(|codepoint| codepoint as u8 == 0b10 || codepoint as u8 == 0b01)
+            );
 
             // Set explicit congestion event codepoint
             data.transmit.ecn = Some(EcnCodepoint::from_bits(0b11).unwrap())
@@ -487,7 +496,7 @@ impl InMemoryNetwork {
                             Ok(_) => {
                                 outbound_buffer.release(data_len);
                                 schedule_forward_packet(network, link, transmit_destination_addr);
-                            },
+                            }
                             Err(_) => println!(
                                 "ERROR: channel closed while waiting for bandwidth to become available"
                             ),

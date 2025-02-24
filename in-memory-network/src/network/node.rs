@@ -1,8 +1,8 @@
+use crate::HOST_PORT;
+use crate::network::InMemoryNetwork;
 use crate::network::inbound_queue::InboundQueue;
 use crate::network::outbound_buffer::OutboundBuffer;
 use crate::network::spec::{NetworkNodeSpec, NodeKind};
-use crate::network::InMemoryNetwork;
-use crate::HOST_PORT;
 use anyhow::bail;
 use parking_lot::Mutex;
 use std::fmt::{Debug, Formatter};
@@ -23,7 +23,7 @@ impl Node {
         }
     }
 
-    pub fn addresses(&self) -> impl Iterator<Item = IpAddr> {
+    pub fn addresses(&self) -> impl Iterator<Item = IpAddr> + use<> {
         match self {
             Node::Host(host) => vec![host.addr.ip()].into_iter(),
             Node::Router(router) => router.addresses.clone().into_iter(),

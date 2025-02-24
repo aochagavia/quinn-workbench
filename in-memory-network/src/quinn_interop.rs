@@ -1,5 +1,5 @@
-use crate::network::node::{HostHandle, Node};
 use crate::OwnedTransmit;
+use crate::network::node::{HostHandle, Node};
 use quinn::udp::{RecvMeta, Transmit};
 use quinn::{AsyncUdpSocket, UdpPoller};
 use std::io::IoSliceMut;

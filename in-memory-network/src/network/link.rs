@@ -1,11 +1,11 @@
+use crate::InTransitData;
 use crate::network::event::UpdateLinkStatus;
 use crate::network::inbound_queue::InboundQueue;
 use crate::network::node::Node;
 use crate::network::spec::NetworkLinkSpec;
 use crate::tracing::tracer::SimulationStepTracer;
-use crate::InTransitData;
-use futures_util::future::Shared;
 use futures_util::FutureExt;
+use futures_util::future::Shared;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::net::IpAddr;
@@ -125,9 +125,10 @@ impl NetworkLink {
 
     pub(crate) fn send(&mut self, current_node: &Node, data: InTransitData, extra_delay: Duration) {
         // Sanity check
-        assert!(self
-            .rate_calculator
-            .has_bandwidth_available(Instant::now(), data.transmit.contents.len()));
+        assert!(
+            self.rate_calculator
+                .has_bandwidth_available(Instant::now(), data.transmit.contents.len())
+        );
         assert!(matches!(self.status, LinkStatus::Up));
 
         // Record
@@ -250,7 +251,9 @@ impl DataRateCalculator {
     fn has_bandwidth_available(&mut self, now: Instant, payload_size_bytes: usize) -> bool {
         let payload_size_bits = payload_size_bytes.saturating_mul(8);
         if payload_size_bits > self.max_available_bandwidth_bits {
-            println!("WARN: packet will never be sent because its size exceeds the maximum available bandwidth");
+            println!(
+                "WARN: packet will never be sent because its size exceeds the maximum available bandwidth"
+            );
         }
 
         let seconds_since_last_increase = (now - self.last_increase).as_secs_f64();

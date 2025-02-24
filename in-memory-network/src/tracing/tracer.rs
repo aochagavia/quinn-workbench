@@ -1,3 +1,4 @@
+use crate::InTransitData;
 use crate::network::link::NetworkLink;
 use crate::network::node::Node;
 use crate::network::spec::{NetworkNodeSpec, NetworkSpec};
@@ -8,7 +9,6 @@ use crate::tracing::simulation_step::{
 };
 use crate::tracing::simulation_stepper::SimulationStepper;
 use crate::tracing::stats::NetworkStats;
-use crate::InTransitData;
 use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::sync::Arc;

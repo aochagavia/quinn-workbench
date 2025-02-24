@@ -38,22 +38,22 @@ pub struct InTransitData {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::network::InMemoryNetwork;
     use crate::network::event::{NetworkEvent, NetworkEventPayload, UpdateLinkStatus};
     use crate::network::node::{HostHandle, Node};
     use crate::network::route::{IpRange, Route};
     use crate::network::spec::{
         NetworkInterface, NetworkLinkSpec, NetworkNodeSpec, NetworkSpec, NodeKind,
     };
-    use crate::network::InMemoryNetwork;
     use crate::pcap_exporter::PcapExporter;
     use crate::tracing::tracer::SimulationStepTracer;
     use bon::builder;
     use fastrand::Rng;
     use quinn::crypto::rustls::QuicClientConfig;
-    use quinn::rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
     use quinn::rustls::RootCertStore;
+    use quinn::rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
     use quinn::udp::RecvMeta;
-    use quinn::{rustls, AsyncUdpSocket, ClientConfig, Endpoint, EndpointConfig, ServerConfig};
+    use quinn::{AsyncUdpSocket, ClientConfig, Endpoint, EndpointConfig, ServerConfig, rustls};
     use std::future::Future;
     use std::io;
     use std::io::IoSliceMut;

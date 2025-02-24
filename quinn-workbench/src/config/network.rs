@@ -2,7 +2,7 @@ use in_memory_network::network::event::{NetworkEvent, NetworkEventPayload, Updat
 use in_memory_network::network::ip::Ipv4Cidr;
 use in_memory_network::network::route::IpRange;
 use serde::Deserialize;
-use serde_with::{serde_as, DisplayFromStr};
+use serde_with::{DisplayFromStr, serde_as};
 use std::net::IpAddr;
 use std::time::Duration;
 

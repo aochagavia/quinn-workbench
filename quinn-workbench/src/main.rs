@@ -14,16 +14,16 @@ use in_memory_network::pcap_exporter::PcapExporter;
 use quinn::{EndpointConfig, TransportConfig, VarInt};
 use quinn_extensions::ecn_cc::EcnCcFactory;
 use quinn_extensions::no_cc::NoCCConfig;
-use quinn_proto::congestion::NewRenoConfig;
 use quinn_proto::AckFrequencyConfig;
+use quinn_proto::congestion::NewRenoConfig;
 use serde::de::DeserializeOwned;
 use std::fs;
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing_subscriber::fmt::Subscriber;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::Subscriber;
 
 fn main() -> anyhow::Result<()> {
     Subscriber::builder()
@@ -32,7 +32,8 @@ fn main() -> anyhow::Result<()> {
         .without_time()
         .init();
 
-    std::env::set_var("SSLKEYLOGFILE", "keylog.key");
+    // Safety: we are fully single-threaded
+    unsafe { std::env::set_var("SSLKEYLOGFILE", "keylog.key") };
     let opt = CliOpt::parse();
     let simulation_config = load_simulation_config(&opt)?;
 

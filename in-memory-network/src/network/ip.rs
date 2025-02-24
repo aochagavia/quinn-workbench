@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, Ipv4Addr};
 use std::str::FromStr;
