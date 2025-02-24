@@ -47,13 +47,16 @@ impl SimulationStepper {
             match &step.kind {
                 SimulationStepKind::PacketInNode(s) => {
                     if let Some(_link) = self.in_flight_packets.remove(&s.packet_id) {
-                        // TODO: check that the link is actually connected to the target node
+                        // TODO 1: check that the link is actually connected to the target node (we already checked that the link is connected to the source, when sending)
+                        // TODO 2: check that the link didn't go down between the time of sending and the time of receiving (i.e. no up -> down -> up)
                         self.node(&s.node_id).packet_received(s);
                     } else {
                         // TODO: the packet was not in flight, so it must have just been created at
                         // one of the hosts. Check that this node has "permission" to create packets.
                         self.node(&s.node_id).packet_created(s);
                     }
+
+                    // TODO: check that node never exceeds its outbound buffer size (or, check it at the end)
                 }
                 SimulationStepKind::PacketDuplicated(s) => {
                     self.node(&s.node_id).packet_duplicated(s);
