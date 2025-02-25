@@ -24,6 +24,14 @@ pub enum InvalidSimulation {
     MissingNode { node_id: Arc<str> },
     #[error("network link `{link_id}` was referenced but does not exist")]
     MissingLink { link_id: Arc<str> },
+    #[error(
+        "network node `{node_id}` is storing {max_buffer_usage} bytes, but its buffer is of {buffer_size_bytes} bytes"
+    )]
+    NodeExceedsBufferSize {
+        node_id: Arc<str>,
+        buffer_size_bytes: usize,
+        max_buffer_usage: usize,
+    },
     #[error("network node received packet with id `{packet_id}` multiple times")]
     PacketAlreadyReceived { packet_id: Uuid },
     #[error("network node `{node_id}` created a packet out of thin air (packet `{packet_id}`)")]
@@ -95,6 +103,8 @@ pub struct SimulationVerifier {
     in_flight_packets: HashMap<Uuid, InFlightPacket>,
     /// Ids of nodes considered to be hosts
     host_nodes: HashSet<Arc<str>>,
+    /// Map from nodes to metadata useful for verification
+    node_metadata: HashMap<Arc<str>, NodeMetadata>,
     /// Map from links to metadata useful for verification
     link_metadata: HashMap<Arc<str>, LinkMetadata>,
 }
@@ -107,6 +117,7 @@ impl SimulationVerifier {
 
         let network_spec = network_spec.clone();
 
+        let mut node_metadata = HashMap::new();
         let mut replayed_nodes = HashMap::new();
         let mut host_nodes = HashSet::new();
         let mut ip_to_node = HashMap::new();
@@ -115,6 +126,13 @@ impl SimulationVerifier {
             if let NodeKind::Host = node.kind {
                 host_nodes.insert(node_id.clone());
             }
+
+            node_metadata.insert(
+                node_id.clone(),
+                NodeMetadata {
+                    buffer_size_bytes: node.buffer_size_bytes as usize,
+                },
+            );
 
             for interface in &node.interfaces {
                 for addr in &interface.addresses {
@@ -156,6 +174,7 @@ impl SimulationVerifier {
             nodes: replayed_nodes,
             links: replayed_links,
             host_nodes,
+            node_metadata,
             link_metadata,
             ..Default::default()
         })
@@ -168,7 +187,7 @@ impl SimulationVerifier {
         let mut last_buffer_usage_update = None;
         for step in steps {
             if step.relative_time != last_step_time {
-                self.update_max_buffer_usage();
+                self.update_max_buffer_usage()?;
                 last_buffer_usage_update = Some(last_step_time);
                 last_step_time = step.relative_time;
             }
@@ -316,7 +335,7 @@ impl SimulationVerifier {
         }
 
         if last_buffer_usage_update != Some(last_step_time) {
-            self.update_max_buffer_usage();
+            self.update_max_buffer_usage()?;
         }
 
         let stats_by_node = self
@@ -342,10 +361,14 @@ impl SimulationVerifier {
         Ok(VerifiedSimulation { stats_by_node })
     }
 
-    fn update_max_buffer_usage(&mut self) {
-        for node in self.nodes.values_mut() {
-            node.update_max_buffer_usage();
+    fn update_max_buffer_usage(&mut self) -> Result<(), InvalidSimulation> {
+        for (node_id, node) in &mut self.nodes {
+            let max_buffer_usage = node.update_max_buffer_usage();
+            let buffer_size = self.node_metadata[node_id].buffer_size_bytes;
+            if buffer_size < max_buffer_usage {}
         }
+
+        Ok(())
     }
 
     fn node(&mut self, node_id: &Arc<str>) -> Result<&mut ReplayedNode, InvalidSimulation> {
@@ -444,8 +467,9 @@ impl ReplayedNode {
         Ok(())
     }
 
-    fn update_max_buffer_usage(&mut self) {
+    fn update_max_buffer_usage(&mut self) -> usize {
         self.max_buffer_usage = cmp::max(self.buffer_usage, self.max_buffer_usage);
+        self.max_buffer_usage
     }
 
     fn add_packet_to_buffer(
@@ -579,4 +603,9 @@ struct LinkMetadata {
     target_node_id: Arc<str>,
     delay: Duration,
     bandwidth_bps: usize,
+}
+
+#[derive(Clone)]
+struct NodeMetadata {
+    buffer_size_bytes: usize,
 }
