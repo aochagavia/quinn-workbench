@@ -1,5 +1,5 @@
 use crate::InTransitData;
-use crate::network::event::NetworkEvents;
+use crate::network::event::NetworkEventPayload;
 use crate::network::link::NetworkLink;
 use crate::network::node::Node;
 use crate::network::spec::NetworkSpec;
@@ -35,13 +35,17 @@ impl SimulationStepTracer {
         }
     }
 
+    pub fn is_fresh(&self) -> bool {
+        self.simulation_start.elapsed().is_zero()
+    }
+
     pub fn stepper(&self) -> SimulationStepper {
         self.recorded_steps.lock().clone()
     }
 
-    pub fn verifier(&self, events: NetworkEvents) -> anyhow::Result<SimulationVerifier> {
+    pub fn verifier(&self) -> anyhow::Result<SimulationVerifier> {
         let steps = self.recorded_steps.lock().clone().steps();
-        SimulationVerifier::new(steps, &self.network_spec, events)
+        SimulationVerifier::new(steps, &self.network_spec)
     }
 
     fn record(&self, kind: SimulationStepKind) {
@@ -49,6 +53,10 @@ impl SimulationStepTracer {
             relative_time: self.simulation_start.elapsed(),
             kind,
         });
+    }
+
+    pub fn track_link_event(&self, event: NetworkEventPayload) {
+        self.record(SimulationStepKind::NetworkEvent(event));
     }
 
     pub fn track_packet_in_node(&self, node: &Node, packet: &InTransitData) {

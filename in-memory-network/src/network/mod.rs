@@ -12,7 +12,6 @@ pub mod route;
 pub mod spec;
 
 use crate::network::event::{NetworkEventPayload, NetworkEvents, UpdateLinkStatus};
-use crate::network::link::LinkStatus;
 use crate::network::node::{Host, HostHandle, Node};
 use crate::network::outbound_buffer::OutboundBuffer;
 use crate::network::spec::{NetworkSpec, NodeKind};
@@ -65,6 +64,14 @@ impl InMemoryNetwork {
         rng: Rng,
         start: Instant,
     ) -> anyhow::Result<Arc<Self>> {
+        if !tracer.is_fresh() {
+            bail!("attempted to initialize network with an old tracer");
+        }
+
+        if !start.elapsed().is_zero() {
+            bail!("attempted to initialize network with an old start instant");
+        }
+
         let mut routes_by_addr = HashMap::new();
         let all_node_interfaces = network_spec.nodes.iter().map(|n| &n.interfaces);
         for single_node_interfaces in all_node_interfaces {
@@ -103,16 +110,12 @@ impl InMemoryNetwork {
 
         let mut links_by_addr = HashMap::new();
         let mut links_by_id = HashMap::new();
-        let mut link_initial_statuses = events.initial_link_statuses;
         for l in network_spec.links {
             let id = l.id.clone();
             let source = l.source;
             let target = l.target;
-            let status = link_initial_statuses
-                .remove(id.as_ref())
-                .unwrap_or(LinkStatus::Up);
 
-            let l = Arc::new(Mutex::new(NetworkLink::new(l, tracer.clone(), status)));
+            let l = Arc::new(Mutex::new(NetworkLink::new(l, tracer.clone())));
             let conflicting_link = links_by_addr.insert((source, target), l.clone());
             if let Some(conflicting_link) = conflicting_link {
                 bail!(
@@ -183,72 +186,78 @@ impl InMemoryNetwork {
             next_transmit_number: Default::default(),
         });
 
+        // Process initial events
+        for event in events.initial_events {
+            network.process_event(event);
+        }
+
         // Process events in the background
         let network_clone = network.clone();
         tokio::spawn(async move {
             for event in events.sorted_events.into_iter() {
                 // Wait until next event should run
                 tokio::time::sleep_until(start + event.relative_time).await;
-
-                let NetworkEventPayload {
-                    link_id: id,
-                    status,
-                    bandwidth_bps,
-                    delay,
-                    extra_delay,
-                    extra_delay_ratio,
-                    packet_duplication_ratio,
-                    packet_loss_ratio,
-                    congestion_event_ratio,
-                } = event.payload;
-
-                if bandwidth_bps.is_some() {
-                    println!("WARN: changing the bandwidth in events is currently unsupported");
-                }
-
-                if delay.is_some() {
-                    println!("WARN: changing the delay in events is currently unsupported");
-                }
-
-                if extra_delay.is_some() {
-                    println!("WARN: changing the extra delay in events is currently unsupported");
-                }
-
-                if extra_delay_ratio.is_some() {
-                    println!(
-                        "WARN: changing the extra delay ratio in events is currently unsupported"
-                    );
-                }
-
-                if packet_duplication_ratio.is_some() {
-                    println!(
-                        "WARN: changing the packet duplication ratio in events is currently unsupported"
-                    );
-                }
-
-                if packet_loss_ratio.is_some() {
-                    println!(
-                        "WARN: changing the packet loss ratio in events is currently unsupported"
-                    );
-                }
-
-                if congestion_event_ratio.is_some() {
-                    println!(
-                        "WARN: changing the congestion event ratio in events is currently unsupported"
-                    );
-                }
-
-                let Some(link) = network_clone.links_by_id.get(&id) else {
-                    println!("WARN: skipping received event for link that doesn't exist ({id})");
-                    continue;
-                };
-
-                link.lock()
-                    .update_status(status.unwrap_or(UpdateLinkStatus::Up));
+                network_clone.process_event(event.payload);
             }
         });
 
         Ok(network)
+    }
+
+    fn process_event(&self, event: NetworkEventPayload) {
+        let NetworkEventPayload {
+            link_id: id,
+            status,
+            bandwidth_bps,
+            delay,
+            extra_delay,
+            extra_delay_ratio,
+            packet_duplication_ratio,
+            packet_loss_ratio,
+            congestion_event_ratio,
+        } = event.clone();
+
+        if bandwidth_bps.is_some() {
+            println!("WARN: changing the bandwidth in events is currently unsupported");
+        }
+
+        if delay.is_some() {
+            println!("WARN: changing the delay in events is currently unsupported");
+        }
+
+        if extra_delay.is_some() {
+            println!("WARN: changing the extra delay in events is currently unsupported");
+        }
+
+        if extra_delay_ratio.is_some() {
+            println!("WARN: changing the extra delay ratio in events is currently unsupported");
+        }
+
+        if packet_duplication_ratio.is_some() {
+            println!(
+                "WARN: changing the packet duplication ratio in events is currently unsupported"
+            );
+        }
+
+        if packet_loss_ratio.is_some() {
+            println!("WARN: changing the packet loss ratio in events is currently unsupported");
+        }
+
+        if congestion_event_ratio.is_some() {
+            println!(
+                "WARN: changing the congestion event ratio in events is currently unsupported"
+            );
+        }
+
+        let Some(link) = self.links_by_id.get(&id) else {
+            println!("WARN: skipping received event for link that doesn't exist ({id})");
+            return;
+        };
+
+        link.lock()
+            .update_status(status.unwrap_or(UpdateLinkStatus::Up));
+
+        self.tracer.track_link_event(event);
     }
 
     pub fn get_link_status(&self, link_id: &str) -> &'static str {

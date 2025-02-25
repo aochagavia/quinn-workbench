@@ -60,10 +60,11 @@ impl Simulation {
                 .into_iter()
                 .map(|e| e.into())
                 .collect(),
+            &network_spec.links,
         );
         let network = InMemoryNetwork::initialize(
             network_spec.clone(),
-            network_events,
+            network_events.clone(),
             Arc::new(SimulationStepTracer::new(
                 network_check_pcap_exporter,
                 network_spec.clone(),
@@ -99,13 +100,7 @@ impl Simulation {
         ));
         let network = InMemoryNetwork::initialize(
             network_spec,
-            NetworkEvents::new(
-                config
-                    .network_events
-                    .into_iter()
-                    .map(|e| e.into())
-                    .collect(),
-            ),
+            network_events,
             tracer.clone(),
             Rng::with_seed(simulated_network_rng_seed),
             start,

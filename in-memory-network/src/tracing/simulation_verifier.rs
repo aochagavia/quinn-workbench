@@ -1,5 +1,4 @@
-use crate::network::event::{NetworkEvent, NetworkEvents, UpdateLinkStatus};
-use crate::network::link::LinkStatus;
+use crate::network::event::UpdateLinkStatus;
 use crate::network::spec::{NetworkSpec, NodeKind};
 use crate::tracing::simulation_step::{
     GenericPacketEvent, PacketDropped, SimulationStep, SimulationStepKind,
@@ -30,7 +29,7 @@ pub enum InvalidSimulation {
     #[error("network node `{node_id}` created a packet out of thin air (packet `{packet_id}`)")]
     PacketCreatedByRouterNode { node_id: Arc<str>, packet_id: Uuid },
     #[error(
-        "network node removed packet `{packet_id}` from its buffer, but according to the trace the packet was not present at all"
+        "network node references packet `{packet_id}`, but according to the trace the packet is not present in the node at this moment"
     )]
     MissingPacket { packet_id: Uuid },
     #[error(
@@ -38,9 +37,9 @@ pub enum InvalidSimulation {
     )]
     MissingLostPacket { packet_id: Uuid },
     #[error(
-        "network node `{node_id}` sent a packet through link `{link_id}`, but said link was unavailable at this point in time (it was either saturated or down)"
+        "network node `{node_id}` sent a packet through link `{link_id}`, but said link was offline at this point in time"
     )]
-    InvalidPacketSend {
+    OfflinePacketSend {
         node_id: Arc<str>,
         link_id: Arc<str>,
     },
@@ -72,6 +71,15 @@ pub enum InvalidSimulation {
         node_id: Arc<str>,
         link_id: Arc<str>,
     },
+    #[error(
+        "network node `{node_id}` sent a packet through link `{link_id}`, but the link didn't have enough available bandwidth (link bandwidth is {max_bps} bps, but used bandwidth was {observed_bps} bps)"
+    )]
+    LinkBandwidthExceeded {
+        node_id: Arc<str>,
+        link_id: Arc<str>,
+        max_bps: usize,
+        observed_bps: usize,
+    },
 }
 
 #[derive(Default)]
@@ -85,20 +93,14 @@ pub struct SimulationVerifier {
     in_flight_packets: HashMap<Uuid, InFlightPacket>,
     /// Ids of nodes considered to be hosts
     host_nodes: HashSet<Arc<str>>,
-    /// Network events
-    network_events: Vec<NetworkEvent>,
     /// Map from links to metadata useful for verification
     link_metadata: HashMap<Arc<str>, LinkMetadata>,
 }
 
 impl SimulationVerifier {
-    pub fn new(
-        mut steps: Vec<SimulationStep>,
-        network_spec: &NetworkSpec,
-        events: NetworkEvents,
-    ) -> anyhow::Result<Self> {
+    pub fn new(mut steps: Vec<SimulationStep>, network_spec: &NetworkSpec) -> anyhow::Result<Self> {
         if !steps.is_sorted_by_key(|s| s.relative_time) {
-            steps.sort_unstable_by_key(|s| s.relative_time);
+            steps.sort_by_key(|s| s.relative_time);
         }
 
         let network_spec = network_spec.clone();
@@ -140,18 +142,11 @@ impl SimulationVerifier {
                     source_node_id: source_id.clone(),
                     target_node_id: target_id.clone(),
                     delay: link.delay,
+                    bandwidth_bps: link.bandwidth_bps as usize,
                 },
             );
 
             replayed_links.insert(link.id, ReplayedLink::default());
-        }
-
-        for (link_id, status) in events.initial_link_statuses {
-            if let LinkStatus::Down { .. } = status {
-                if let Some(link) = replayed_links.get_mut(&link_id) {
-                    link.set_status(UpdateLinkStatus::Down, Duration::from_secs(0));
-                }
-            }
         }
 
         Ok(Self {
@@ -160,37 +155,13 @@ impl SimulationVerifier {
             links: replayed_links,
             host_nodes,
             link_metadata,
-            network_events: events.sorted_events,
             ..Default::default()
         })
     }
 
     pub fn verify(mut self) -> Result<VerifiedSimulation, InvalidSimulation> {
-        let events = mem::take(&mut self.network_events);
-        let mut peekable_events = events.iter().peekable();
         let steps = mem::take(&mut self.steps);
         for step in steps {
-            let next_step = step.relative_time;
-
-            // Process any pending events before going to the next step
-            loop {
-                match peekable_events.peek() {
-                    Some(e) if e.relative_time <= next_step => {
-                        // Update status if the link exists (we ignore updates for links that have
-                        // events but are not part of the network)
-                        if let Some(status) = e.payload.status {
-                            if let Some(link) = self.links.get_mut(&e.payload.link_id) {
-                                link.set_status(status, e.relative_time);
-                            }
-                        }
-
-                        // Advance the iterator
-                        peekable_events.next();
-                    }
-                    _ => break,
-                }
-            }
-
             match &step.kind {
                 SimulationStepKind::PacketInNode(s) => {
                     if let Some(in_flight) = self.in_flight_packets.remove(&s.packet_id) {
@@ -205,7 +176,7 @@ impl SimulationVerifier {
 
                         // Check that transmission took enough time
                         let time_in_flight = step.relative_time - in_flight.sent_at_relative;
-                        if time_in_flight < link_metadata.delay {
+                        if time_in_flight < link_metadata.delay + in_flight.extra_delay {
                             return Err(InvalidSimulation::TooFastPacketReceive {
                                 node_id: s.node_id.clone(),
                                 link_id: in_flight.link_id,
@@ -255,10 +226,10 @@ impl SimulationVerifier {
                     }
                 }
                 SimulationStepKind::PacketInTransit(s) => {
-                    self.node(&s.node_id)?.packet_sent(s.packet_id)?;
+                    let packet = self.node(&s.node_id)?.packet_sent(s.packet_id)?;
 
                     // Check that the link is actually connected to the source node
-                    let link_metadata = self.link_metadata.get(&s.link_id).ok_or(
+                    let link_metadata = self.link_metadata.get(&s.link_id).cloned().ok_or(
                         InvalidSimulation::MissingLink {
                             link_id: s.link_id.clone(),
                         },
@@ -273,19 +244,34 @@ impl SimulationVerifier {
                     // Check that the link is up
                     let link = self.link(&s.link_id)?;
                     if !link.is_up() {
-                        return Err(InvalidSimulation::InvalidPacketSend {
+                        return Err(InvalidSimulation::OfflinePacketSend {
                             node_id: s.node_id.clone(),
                             link_id: s.link_id.clone(),
                         });
                     }
 
-                    // TODO: check that the link is not saturated
+                    // Track the packet send at the link level, to ensure we stay within the link's
+                    // bandwidth
+                    let used_bandwidth_bps = link.packet_sent(
+                        step.relative_time,
+                        packet.size_bytes,
+                        link_metadata.bandwidth_bps,
+                    );
+                    if link_metadata.bandwidth_bps < used_bandwidth_bps {
+                        return Err(InvalidSimulation::LinkBandwidthExceeded {
+                            node_id: s.node_id.clone(),
+                            link_id: s.link_id.clone(),
+                            max_bps: link_metadata.bandwidth_bps,
+                            observed_bps: used_bandwidth_bps,
+                        });
+                    }
 
                     self.in_flight_packets.insert(
                         s.packet_id,
                         InFlightPacket {
                             sent_at_relative: step.relative_time,
                             link_id: s.link_id.clone(),
+                            extra_delay: packet.extra_delay,
                         },
                     );
                 }
@@ -298,10 +284,21 @@ impl SimulationVerifier {
                     self.node(&s.node_id)?.packet_delivered(s.packet_id)?;
                 }
 
-                // TODO: do something with the step below, so we can check that each packet's delay
-                // is respected (i.e. the time between PacketInTransit and PacketInNode matches the
-                // link's delay + extra delay).
-                SimulationStepKind::PacketExtraDelay(_) => {}
+                SimulationStepKind::PacketExtraDelay(s) => {
+                    self.node(&s.node_id)?
+                        .packet_has_extra_delay(s.packet_id, s.extra_delay)?;
+                }
+
+                SimulationStepKind::NetworkEvent(e) => {
+                    if let Some(status) = e.status {
+                        let link = self.links.get_mut(&e.link_id).ok_or(
+                            InvalidSimulation::MissingLink {
+                                link_id: e.link_id.clone(),
+                            },
+                        )?;
+                        link.set_status(status, step.relative_time);
+                    }
+                }
             }
         }
 
@@ -385,10 +382,10 @@ impl ReplayedNode {
         self.add_packet_to_buffer(s.packet_id, s.packet_size_bytes)
     }
 
-    fn packet_sent(&mut self, packet_id: Uuid) -> Result<(), InvalidSimulation> {
+    fn packet_sent(&mut self, packet_id: Uuid) -> Result<ReplayedPacket, InvalidSimulation> {
         let packet = self.remove_packet_from_buffer(packet_id)?;
         self.sent_packets.track_one(packet.size_bytes);
-        Ok(())
+        Ok(packet)
     }
 
     fn packet_delivered(&mut self, packet_id: Uuid) -> Result<ReplayedPacket, InvalidSimulation> {
@@ -411,6 +408,19 @@ impl ReplayedNode {
         self.ecn_packets.track_one(s.packet_size_bytes);
     }
 
+    fn packet_has_extra_delay(
+        &mut self,
+        packet_id: Uuid,
+        delay: Duration,
+    ) -> anyhow::Result<(), InvalidSimulation> {
+        let packet = self
+            .packets
+            .get_mut(&packet_id)
+            .ok_or(InvalidSimulation::MissingPacket { packet_id })?;
+        packet.extra_delay = delay;
+        Ok(())
+    }
+
     fn add_packet_to_buffer(
         &mut self,
         packet_id: Uuid,
@@ -418,7 +428,13 @@ impl ReplayedNode {
     ) -> Result<(), InvalidSimulation> {
         let already_exists = self
             .packets
-            .insert(packet_id, ReplayedPacket { size_bytes })
+            .insert(
+                packet_id,
+                ReplayedPacket {
+                    size_bytes,
+                    extra_delay: Duration::default(),
+                },
+            )
             .is_some();
         if already_exists {
             return Err(InvalidSimulation::PacketAlreadyReceived { packet_id });
@@ -445,10 +461,13 @@ impl ReplayedNode {
 
 mod replayed {
     use super::*;
+    use std::collections::VecDeque;
 
     pub struct ReplayedLink {
         status: UpdateLinkStatus,
         last_down: Option<Duration>,
+        used_bandwidth_bps_in_current_window: usize,
+        packets_using_bandwidth: VecDeque<(Duration, usize)>,
     }
 
     impl ReplayedLink {
@@ -467,6 +486,42 @@ mod replayed {
 
             self.status = status;
         }
+
+        pub fn packet_sent(
+            &mut self,
+            timestamp: Duration,
+            size_bytes: usize,
+            link_bandwidth_bps: usize,
+        ) -> usize {
+            let size_bits = size_bytes * 8;
+            self.packets_using_bandwidth
+                .push_back((timestamp, size_bits));
+            self.used_bandwidth_bps_in_current_window += size_bits;
+
+            // 9600 is the minimum packet size, so if a link can send less than that per second, it
+            // will inevitably appear here as using more bps than available. For that reason, we use
+            // a longer window in that case.
+            let window_seconds = if link_bandwidth_bps < 9600 { 5 } else { 1 };
+
+            loop {
+                let Some((first_timestamp, first_size_bits)) =
+                    self.packets_using_bandwidth.front().copied()
+                else {
+                    break;
+                };
+
+                let first_is_stale =
+                    timestamp - first_timestamp > Duration::from_secs(window_seconds);
+                if first_is_stale {
+                    self.packets_using_bandwidth.pop_front();
+                    self.used_bandwidth_bps_in_current_window -= first_size_bits;
+                } else {
+                    break;
+                }
+            }
+
+            self.used_bandwidth_bps_in_current_window / window_seconds as usize
+        }
     }
 
     impl Default for ReplayedLink {
@@ -474,6 +529,8 @@ mod replayed {
             Self {
                 status: UpdateLinkStatus::Up,
                 last_down: None,
+                used_bandwidth_bps_in_current_window: 0,
+                packets_using_bandwidth: Default::default(),
             }
         }
     }
@@ -481,15 +538,19 @@ mod replayed {
 
 struct ReplayedPacket {
     size_bytes: usize,
+    extra_delay: Duration,
 }
 
 struct InFlightPacket {
     sent_at_relative: Duration,
+    extra_delay: Duration,
     link_id: Arc<str>,
 }
 
+#[derive(Clone)]
 struct LinkMetadata {
     source_node_id: Arc<str>,
     target_node_id: Arc<str>,
     delay: Duration,
+    bandwidth_bps: usize,
 }

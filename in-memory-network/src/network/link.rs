@@ -63,14 +63,10 @@ impl LinkStatus {
 }
 
 impl NetworkLink {
-    pub(crate) fn new(
-        l: NetworkLinkSpec,
-        tracer: Arc<SimulationStepTracer>,
-        status: LinkStatus,
-    ) -> Self {
+    pub(crate) fn new(l: NetworkLinkSpec, tracer: Arc<SimulationStepTracer>) -> Self {
         Self {
             id: l.id,
-            status,
+            status: LinkStatus::new_down(),
             tracer,
             target: l.target,
             queue: InboundQueue::new(),

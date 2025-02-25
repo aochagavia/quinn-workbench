@@ -10,7 +10,6 @@ use anyhow::Context;
 use clap::Parser;
 use config::cli::CliOpt;
 use config::quinn::QuinnJsonConfig;
-use in_memory_network::network::event::NetworkEvents;
 use in_memory_network::pcap_exporter::PcapExporter;
 use quinn::{EndpointConfig, TransportConfig, VarInt};
 use quinn_extensions::ecn_cc::EcnCcFactory;
@@ -83,16 +82,6 @@ async fn run_and_report_stats(
     config: SimulationConfig,
     pcap_exporter: Arc<PcapExporter>,
 ) -> anyhow::Result<()> {
-    // Duplicate events for later use with the verifier
-    let network_events = NetworkEvents::new(
-        config
-            .network_events
-            .clone()
-            .into_iter()
-            .map(|e| e.into())
-            .collect(),
-    );
-
     let mut simulation = Simulation::new();
     let result = simulation.run(options, config, pcap_exporter.clone()).await;
 
@@ -109,7 +98,7 @@ async fn run_and_report_stats(
 
     println!("--- Stats ---");
     let verified_simulation = tracer
-        .verifier(network_events)
+        .verifier()
         .context("failed to create simulation verifier")?
         .verify()
         .context("failed to verify simulation")?;

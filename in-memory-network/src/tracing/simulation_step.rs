@@ -1,3 +1,4 @@
+use crate::network::event::NetworkEventPayload;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, DurationNanoSeconds, serde_as};
 use std::sync::Arc;
@@ -33,6 +34,8 @@ pub enum SimulationStepKind {
     PacketInTransit(PacketInTransit),
     /// The packet has been delivered to an application
     PacketDeliveredToApplication(GenericPacketEvent),
+    /// A network event happened
+    NetworkEvent(NetworkEventPayload),
 }
 
 #[serde_as]

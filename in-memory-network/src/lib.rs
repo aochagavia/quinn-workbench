@@ -234,7 +234,7 @@ mod test {
 
         InMemoryNetwork::initialize(
             network_spec.clone(),
-            NetworkEvents::new(events.unwrap_or_default()),
+            NetworkEvents::new(events.unwrap_or_default(), &network_spec.links),
             Arc::new(SimulationStepTracer::new(
                 Arc::new(PcapExporter::new(io::sink())),
                 network_spec,
