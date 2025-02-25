@@ -51,11 +51,13 @@ pub enum InvalidSimulation {
         link_id: Arc<str>,
     },
     #[error(
-        "network node `{node_id}` received a packet through link `{link_id}`, but said link became unavailable while the packet was in flight"
+        "network node `{node_id}` received a packet through link `{link_id}`, but said link became unavailable while the packet was in flight (packet sent at {packet_sent_ns} ns, link was last down at {link_last_down_ns} ns)"
     )]
     OfflinePacketReceive {
         node_id: Arc<str>,
         link_id: Arc<str>,
+        packet_sent_ns: u128,
+        link_last_down_ns: u128,
     },
     #[error(
         "network node `{node_id}` received a packet through link `{link_id}`, but according to the network graph the node is not connected to that link as a receiver"
@@ -185,14 +187,18 @@ impl SimulationVerifier {
 
                         // Check that the link didn't go down after sending (i.e. forbid up -> down -> up)
                         let link = self.link(&in_flight.link_id)?;
-                        if link
-                            .last_down()
-                            .is_some_and(|timestamp| timestamp >= in_flight.sent_at_relative)
-                        {
-                            return Err(InvalidSimulation::OfflinePacketReceive {
-                                node_id: s.node_id.clone(),
-                                link_id: in_flight.link_id.clone(),
-                            });
+                        match link.last_down() {
+                            Some(last_down_relative)
+                                if last_down_relative >= in_flight.sent_at_relative =>
+                            {
+                                return Err(InvalidSimulation::OfflinePacketReceive {
+                                    node_id: s.node_id.clone(),
+                                    link_id: in_flight.link_id.clone(),
+                                    packet_sent_ns: in_flight.sent_at_relative.as_nanos(),
+                                    link_last_down_ns: last_down_relative.as_nanos(),
+                                });
+                            }
+                            _ => {}
                         }
 
                         self.node(&s.node_id)?.packet_received(s)?;
@@ -465,7 +471,7 @@ mod replayed {
 
     pub struct ReplayedLink {
         status: UpdateLinkStatus,
-        last_down: Option<Duration>,
+        last_down_relative: Option<Duration>,
         used_bandwidth_bps_in_current_window: usize,
         packets_using_bandwidth: VecDeque<(Duration, usize)>,
     }
@@ -476,12 +482,12 @@ mod replayed {
         }
 
         pub fn last_down(&self) -> Option<Duration> {
-            self.last_down
+            self.last_down_relative
         }
 
-        pub fn set_status(&mut self, status: UpdateLinkStatus, timestamp: Duration) {
+        pub fn set_status(&mut self, status: UpdateLinkStatus, timestamp_relative: Duration) {
             if let UpdateLinkStatus::Down = status {
-                self.last_down = Some(timestamp);
+                self.last_down_relative = Some(timestamp_relative);
             }
 
             self.status = status;
@@ -528,7 +534,7 @@ mod replayed {
         fn default() -> Self {
             Self {
                 status: UpdateLinkStatus::Up,
-                last_down: None,
+                last_down_relative: None,
                 used_bandwidth_bps_in_current_window: 0,
                 packets_using_bandwidth: Default::default(),
             }

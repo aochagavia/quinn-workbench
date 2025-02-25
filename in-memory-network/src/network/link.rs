@@ -22,6 +22,7 @@ pub struct NetworkLink {
     rate_calculator: DataRateCalculator,
     packets_waiting_for_bandwidth: VecDeque<(InTransitData, tokio::sync::oneshot::Sender<()>)>,
     status: LinkStatus,
+    last_down: Option<Instant>,
     delay: Duration,
     pub(crate) congestion_event_ratio: f64,
     pub(crate) packet_loss_ratio: f64,
@@ -66,7 +67,8 @@ impl NetworkLink {
     pub(crate) fn new(l: NetworkLinkSpec, tracer: Arc<SimulationStepTracer>) -> Self {
         Self {
             id: l.id,
-            status: LinkStatus::new_down(),
+            status: LinkStatus::Up,
+            last_down: None,
             tracer,
             target: l.target,
             queue: InboundQueue::new(),
@@ -81,8 +83,9 @@ impl NetworkLink {
         }
     }
 
-    pub fn is_up(&self) -> bool {
-        !self.status.is_down()
+    pub fn is_up_since(&self, instant: Instant) -> bool {
+        let down_after_instant = matches!(self.last_down, Some(down) if down >= instant);
+        !down_after_instant
     }
 
     pub(crate) fn status_str(&self) -> &'static str {
@@ -104,9 +107,10 @@ impl NetworkLink {
             (LinkStatus::Up, UpdateLinkStatus::Down) => {
                 // Set status to down
                 self.status = LinkStatus::new_down();
+                self.last_down = Some(Instant::now());
 
                 // Nothing else to do here, because:
-                // 1. already sent packets will continue traveling to their destination
+                // 1. already sent packets will be dropped by the forwarding code if they are still in flight
                 // 2. packets in the router's outbound buffer will stay there until the link is back up
                 // 3. attempting to send new packets will cause them to land in the buffer (if there's space)
             }
@@ -209,8 +213,8 @@ impl NetworkLink {
         self.queue.receive(max_transmits)
     }
 
-    pub(crate) fn time_of_next_receive(&self) -> Option<Instant> {
-        self.queue.time_of_next_receive()
+    pub(crate) fn next_in_flight_packet_times(&self) -> Option<(Instant, Instant)> {
+        self.queue.next_in_flight_packet_times()
     }
 }
 

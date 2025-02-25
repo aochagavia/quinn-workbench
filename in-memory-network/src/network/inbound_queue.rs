@@ -30,7 +30,7 @@ impl InboundQueue {
     }
 
     pub(crate) fn register_waker(&mut self, waker: Waker) {
-        if let Some(next_read) = self.time_of_next_receive() {
+        if let Some((_, next_read)) = self.next_in_flight_packet_times() {
             // Wake up next time we can read
             tokio::task::spawn(async move {
                 tokio::time::sleep_until(next_read).await;
@@ -64,8 +64,8 @@ impl InboundQueue {
         received
     }
 
-    pub(crate) fn time_of_next_receive(&self) -> Option<Instant> {
-        self.queue.peek().map(|x| x.arrival_time())
+    pub(crate) fn next_in_flight_packet_times(&self) -> Option<(Instant, Instant)> {
+        self.queue.peek().map(|x| (x.sent, x.arrival_time()))
     }
 }
 

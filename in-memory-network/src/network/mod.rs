@@ -11,7 +11,7 @@ mod outbound_buffer;
 pub mod route;
 pub mod spec;
 
-use crate::network::event::{NetworkEventPayload, NetworkEvents, UpdateLinkStatus};
+use crate::network::event::{NetworkEventPayload, NetworkEvents};
 use crate::network::node::{Host, HostHandle, Node};
 use crate::network::outbound_buffer::OutboundBuffer;
 use crate::network::spec::{NetworkSpec, NodeKind};
@@ -254,8 +254,9 @@ impl InMemoryNetwork {
             return;
         };
 
-        link.lock()
-            .update_status(status.unwrap_or(UpdateLinkStatus::Up));
+        if let Some(status) = status {
+            link.lock().update_status(status);
+        }
 
         self.tracer.track_link_event(event);
     }
@@ -399,7 +400,7 @@ impl InMemoryNetwork {
     ///
     /// Resolves the link through which the packet should be sent and attempts to send it right
     /// away. If the link is temporarily unavailable or saturated, stores the packet in the node's
-    /// buffer (or drops it when the buffer is full).
+    /// buffer for later sending (or drops it when the buffer is full).
     pub(crate) fn forward(
         self: &Arc<InMemoryNetwork>,
         current_node: Node,
@@ -533,9 +534,9 @@ fn schedule_forward_packet(
     link: Arc<Mutex<NetworkLink>>,
     transmit_destination_addr: SocketAddr,
 ) {
-    let Some(next_receive) = link.lock().time_of_next_receive() else {
-        // There are no packets waiting to be received in the link (e.g. maybe they were
-        // dropped or are being buffered)
+    let Some((time_sent, time_received)) = link.lock().next_in_flight_packet_times() else {
+        // There are no packets waiting to be sent in the link (e.g. maybe they were dropped or are
+        // being buffered by the node)
         return;
     };
 
@@ -545,9 +546,15 @@ fn schedule_forward_packet(
         // the next hop (hence the `network.send`)
         let network = network.clone();
         let router = router.clone();
-        schedule_forward_packet_inner(tracer, link.clone(), next_receive, move |transmit| {
-            network.forward(Node::Router(router.clone()), transmit);
-        });
+        schedule_forward_packet_inner(
+            tracer,
+            link.clone(),
+            time_sent,
+            time_received,
+            move |transmit| {
+                network.forward(Node::Router(router.clone()), transmit);
+            },
+        );
     } else {
         // The packet should be forwarded to the final host's inbound queue (from where it will
         // be automatically picked up by quinn)
@@ -558,36 +565,42 @@ fn schedule_forward_packet(
             .clone();
         let host_queue = host.inbound.clone();
 
-        schedule_forward_packet_inner(tracer, link.clone(), next_receive, move |transmit| {
-            network
-                .tracer
-                .track_packet_in_node(&Node::Host(host.clone()), &transmit);
-            host_queue.lock().send(transmit, Duration::default())
-        });
+        schedule_forward_packet_inner(
+            tracer,
+            link.clone(),
+            time_sent,
+            time_received,
+            move |transmit| {
+                network
+                    .tracer
+                    .track_packet_in_node(&Node::Host(host.clone()), &transmit);
+                host_queue.lock().send(transmit, Duration::default())
+            },
+        );
     };
 }
 
 fn schedule_forward_packet_inner(
     tracer: Arc<SimulationStepTracer>,
     link: Arc<Mutex<NetworkLink>>,
-    next_receive: Instant,
+    time_sent: Instant,
+    time_received: Instant,
     handle_transmit: impl Fn(InTransitData) + Send + 'static,
 ) {
     tokio::spawn(async move {
         // Take link delay into account
-        tokio::time::sleep_until(next_receive).await;
+        tokio::time::sleep_until(time_received).await;
 
         // Now receive the packets
         let mut link = link.lock();
         let transmits = link.receive(usize::MAX);
 
-        // Only handle the packets if the link is up, otherwise track them as lost
-        if link.is_up() {
-            for transmit in transmits {
+        // Only handle the packets if the link didn't go down after sending, otherwise track them as
+        // lost
+        for transmit in transmits {
+            if link.is_up_since(time_sent) {
                 handle_transmit(transmit);
-            }
-        } else {
-            for transmit in transmits {
+            } else {
                 tracer.track_lost_in_transit(&transmit, &link);
             }
         }
