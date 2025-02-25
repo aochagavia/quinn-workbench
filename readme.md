@@ -196,6 +196,28 @@ flags control other aspects of the simulation:
 
 ```
 
+## Validation
+
+Simulating an IP network is complex, so we need to ensure the implementation is actually sound. For
+that purpose, the simulator records events to a so-called _replay log_, which can be used to
+independently replay the network traffic and verify that all network invariants were satisfied. We
+automatically run our verifier after every simulation and raise an error if applicable.
+
+At the time of this writing, we are validating the following properties of the network:
+
+- Packets are only created at host nodes
+- Packets are only duplicated when a link injects a randomized duplication (see
+  `link.packet_duplication_ratio` above)
+- When packets are transmitted, they must travel through a link to which both the source and the
+  target nodes are connected
+- Packets are never transmitted through a link that is known to be offline at that moment
+- Packets are lost if the link goes down during transmission (after the packet was sent, but before
+  it arrives)
+- Packets are received only after enough time passes since they were sent (taking the link's latency
+  into account and random delays injected through `link.extra_delay_ms`)
+- Nodes never exceed their configured buffer size
+- Links never exceed their configured bandwidth
+
 ### Acknowledgements
 
 With special thanks to Marc Blanchet ([Viagénie inc.](https://www.viagenie.ca/)) for funding this
