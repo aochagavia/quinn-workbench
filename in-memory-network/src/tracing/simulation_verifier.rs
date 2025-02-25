@@ -163,7 +163,16 @@ impl SimulationVerifier {
 
     pub fn verify(mut self) -> Result<VerifiedSimulation, InvalidSimulation> {
         let steps = mem::take(&mut self.steps);
+
+        let mut last_step_time = Duration::from_secs(0);
+        let mut last_buffer_usage_update = None;
         for step in steps {
+            if step.relative_time != last_step_time {
+                self.update_max_buffer_usage();
+                last_buffer_usage_update = Some(last_step_time);
+                last_step_time = step.relative_time;
+            }
+
             match &step.kind {
                 SimulationStepKind::PacketInNode(s) => {
                     if let Some(in_flight) = self.in_flight_packets.remove(&s.packet_id) {
@@ -214,8 +223,6 @@ impl SimulationVerifier {
 
                         self.node(&s.node_id)?.packet_created(s)?;
                     }
-
-                    // TODO: check that node never exceeds its outbound buffer size (or, check it at the end)
                 }
                 SimulationStepKind::PacketDuplicated(s) => {
                     self.node(&s.node_id)?.packet_duplicated(s)?;
@@ -308,12 +315,16 @@ impl SimulationVerifier {
             }
         }
 
+        if last_buffer_usage_update != Some(last_step_time) {
+            self.update_max_buffer_usage();
+        }
+
         let stats_by_node = self
             .nodes
             .into_iter()
-            .map(|(k, v)| {
+            .map(|(node_id, v)| {
                 (
-                    k,
+                    node_id,
                     NodeStats {
                         sent: v.sent_packets,
                         received: v.received_packets,
@@ -329,6 +340,12 @@ impl SimulationVerifier {
             .collect();
 
         Ok(VerifiedSimulation { stats_by_node })
+    }
+
+    fn update_max_buffer_usage(&mut self) {
+        for node in self.nodes.values_mut() {
+            node.update_max_buffer_usage();
+        }
     }
 
     fn node(&mut self, node_id: &Arc<str>) -> Result<&mut ReplayedNode, InvalidSimulation> {
@@ -427,6 +444,10 @@ impl ReplayedNode {
         Ok(())
     }
 
+    fn update_max_buffer_usage(&mut self) {
+        self.max_buffer_usage = cmp::max(self.buffer_usage, self.max_buffer_usage);
+    }
+
     fn add_packet_to_buffer(
         &mut self,
         packet_id: Uuid,
@@ -447,7 +468,6 @@ impl ReplayedNode {
         }
 
         self.buffer_usage += size_bytes;
-        self.max_buffer_usage = cmp::max(self.max_buffer_usage, self.buffer_usage);
 
         Ok(())
     }
