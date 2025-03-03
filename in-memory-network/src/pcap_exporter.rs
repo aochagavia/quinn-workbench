@@ -53,6 +53,10 @@ impl PcapExporter {
         }
     }
 
+    pub fn noop() -> Self {
+        Self::new(std::io::sink())
+    }
+
     pub fn flush(&self) -> anyhow::Result<()> {
         self.writer
             .lock()

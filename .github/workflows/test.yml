@@ -7,7 +7,7 @@ on:
   pull_request:
 jobs:
   test:
-    name: Run unit tests
+    name: Run tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -15,8 +15,12 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Run tests
+      - name: Run unit tests
         run: cargo test
+      - name: Compile all binaries
+        run: cargo build --release
+      - name: Run golden tests
+        run: cargo run --release --bin golden-tests
       - name: Run formatting check
         run: cargo fmt --check
       - name: Run clippy

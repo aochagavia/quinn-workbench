@@ -1,0 +1,9 @@
+[package]
+name = "golden-tests"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+console = "0.15.11"
+similar = { version = "2.7.0", features = ["inline"] }

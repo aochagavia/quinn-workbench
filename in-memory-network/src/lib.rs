@@ -236,7 +236,7 @@ mod test {
             network_spec.clone(),
             NetworkEvents::new(events.unwrap_or_default(), &network_spec.links),
             Arc::new(SimulationStepTracer::new(
-                Arc::new(PcapExporter::new(io::sink())),
+                Arc::new(PcapExporter::noop()),
                 network_spec,
             )),
             Rng::with_seed(42),

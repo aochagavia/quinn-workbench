@@ -1,5 +1,5 @@
 [workspace]
-members = ["in-memory-network", "quinn-workbench"]
+members = [ "golden-tests", "in-memory-network", "quinn-workbench"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -21,4 +21,4 @@ serde_with = "3.11.0"
 tokio = { version = "1.37.0", features = ["test-util", "macros"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
-uuid = { version = "1.11.0", features = ["v4"] }
+uuid = { version = "1.11.0" }

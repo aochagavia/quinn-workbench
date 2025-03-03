@@ -109,9 +109,8 @@ impl Simulation {
 
         // Set up server certificate
         let server_name = "server-name";
-        let cert = rcgen::generate_simple_self_signed(vec![server_name.into()]).unwrap();
-        let key = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
-        let cert = CertificateDer::from(cert.cert);
+        let key = PrivatePkcs8KeyDer::from(server::KEY_PAIR_DER_RSA);
+        let cert = CertificateDer::from(server::CERT_DER_RSA);
 
         // Let a server listen in the background
         let mut quinn_rng = Rng::with_seed(quinn_rng_seed);

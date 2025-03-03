@@ -1,0 +1,56 @@
+--- Params ---
+* Quinn seed: 0
+* Network seed: 42
+* Quinn config path: test-data/earth-mars/quinn.json
+* Network graph path: test-data/earth-mars/networkgraph-5nodes.json
+* Network events path: test-data/earth-mars/events.json
+--- Network ---
+* Initial link statuses (derived from events):
+  * GND-DSN: UP
+  * DSN-GND: UP
+  * DSN-MRO: DOWN
+  * MRO-DSN: DOWN
+  * MRO-M20: DOWN
+  * M20-MRO: DOWN
+  * M20-ING: UP
+  * ING-M20: UP
+* Running connectivity check...
+* Connectivity check passed (packets arrived after 24072838 ms and 66090838 ms)
+--- Requests ---
+0.00s CONNECT (conn = A)
+68748.84s CONNECTED (conn = A)
+68748.84s GET /index.html (stream = A1)
+243839.84s GET /index.html (stream = A2)
+286632.84s GET /index.html (stream = A3)
+643383.86s GET /index.html (stream = A4)
+886041.84s GET /index.html (stream = A5)
+972307.84s GET /index.html (stream = A6)
+1045071.84s GET /index.html (stream = A7)
+1132617.84s GET /index.html (stream = A8)
+2108809.84s GET /index.html (stream = A9)
+2428032.84s GET /index.html (stream = A10)
+2865060.86s DONE (conn = A, request/response amount = 10)
+2865060.86s All connections closed
+--- Replay log ---
+* Replay log available at replay-log.json
+--- Stats ---
+* GND (client)
+  * Sent packets: 55 (9362 bytes)
+    | 0 packets duplicated in transit (0 bytes)
+    | 0 packets marked with the CE ECN codepoint in transit (0 bytes)
+    | 0 packets dropped in transit (0 bytes)
+  * Received packets: 38 (16900 bytes)
+    | 0 packets received out of order (0 bytes)
+* ING (server)
+  * Sent packets: 44 (18131 bytes)
+    | 0 packets duplicated in transit (0 bytes)
+    | 0 packets marked with the CE ECN codepoint in transit (0 bytes)
+    | 0 packets dropped in transit (0 bytes)
+  * Received packets: 42 (5256 bytes)
+    | 0 packets received out of order (0 bytes)
+--- Max buffer usage per node ---
+* MRO: 3939 bytes (0 packets dropped due to buffer being full)
+* M20: 3710 bytes (0 packets dropped due to buffer being full)
+* DSN: 3600 bytes (0 packets dropped due to buffer being full)
+* GND: 0 bytes (0 packets dropped due to buffer being full)
+* ING: 0 bytes (0 packets dropped due to buffer being full)

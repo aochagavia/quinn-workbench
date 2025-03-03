@@ -261,6 +261,12 @@ impl InMemoryNetwork {
         self.tracer.track_link_event(event);
     }
 
+    pub fn new_packet_id(&self) -> Uuid {
+        // We generate or own uuids because we need them to be fully deterministic
+        let uuid = self.rng.lock().u128(..);
+        Uuid::from_u128(uuid)
+    }
+
     pub fn get_link_status(&self, link_id: &str) -> &'static str {
         self.links_by_id[link_id].lock().status_str()
     }
@@ -388,7 +394,7 @@ impl InMemoryNetwork {
 
     pub(crate) fn in_transit_data(&self, source: Host, transmit: OwnedTransmit) -> InTransitData {
         InTransitData {
-            id: Uuid::new_v4(),
+            id: self.new_packet_id(),
             duplicate: false,
             source,
             transmit,
@@ -464,7 +470,7 @@ impl InMemoryNetwork {
 
         let maybe_duplicate = duplicate.then(|| {
             let mut duplicate_data = data.clone();
-            duplicate_data.id = Uuid::new_v4();
+            duplicate_data.id = self.new_packet_id();
             duplicate_data.duplicate = true;
             duplicate_data
         });

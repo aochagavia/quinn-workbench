@@ -143,7 +143,11 @@ async fn run_and_report_stats(
 
     println!("--- Max buffer usage per node ---");
     let mut buffer_usage: Vec<_> = verified_simulation.stats_by_node.iter().collect();
-    buffer_usage.sort_unstable_by_key(|tup| tup.1.max_buffer_usage);
+    buffer_usage.sort_unstable_by(|t1, t2| {
+        t1.1.max_buffer_usage
+            .cmp(&t2.1.max_buffer_usage)
+            .then(t2.0.cmp(t1.0))
+    });
     for (node_id, stats) in buffer_usage.into_iter().rev() {
         println!(
             "* {node_id}: {} bytes ({} packets dropped due to buffer being full)",
