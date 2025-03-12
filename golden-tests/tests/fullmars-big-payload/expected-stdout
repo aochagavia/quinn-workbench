@@ -1,0 +1,74 @@
+--- Params ---
+* Quinn seed: 0
+* Network seed: 42
+* Quinn config path: test-data/earth-mars/quinn.json
+* Network graph path: test-data/earth-mars/networkgraph-fullmars.json
+* Network events path: test-data/earth-mars/events.json
+--- Network ---
+* Initial link statuses (derived from events):
+  * GND-DSN: UP
+  * DSN-GND: UP
+  * DSN-MRO: DOWN
+  * MRO-DSN: DOWN
+  * DSN-TGO: UP
+  * TGO-DSN: UP
+  * DSN-MVN: UP
+  * MVN-DSN: UP
+  * DSN-ODY: UP
+  * ODY-DSN: UP
+  * MRO-M20: DOWN
+  * M20-MRO: DOWN
+  * TGO-M20: UP
+  * M20-TGO: UP
+  * MVN-M20: UP
+  * M20-MVN: UP
+  * ODY-M20: UP
+  * M20-ODY: UP
+  * MRO-MSL: UP
+  * MSL-MRO: UP
+  * TGO-MSL: UP
+  * MSL-TGO: UP
+  * MVN-MSL: UP
+  * MSL-MVN: UP
+  * ODY-MSL: UP
+  * MSL-ODY: UP
+  * M20-ING: UP
+  * ING-M20: UP
+* Running connectivity check...
+* Connectivity check passed (packets arrived after 901200 ms and 901200 ms)
+--- Requests ---
+0.00s CONNECT (conn = A)
+1802.40s CONNECTED (conn = A)
+1802.40s GET /index.html (stream = A1)
+3731505.74s DONE (conn = A, request/response amount = 1)
+3731505.74s All connections closed
+--- Replay log ---
+* Replay log available at replay-log.json
+--- Node stats ---
+* GND (client)
+  * Sent packets: 1028 (42801 bytes)
+    | 0 packets duplicated in transit (0 bytes)
+    | 0 packets marked with the CE ECN codepoint in transit (0 bytes)
+    | 0 packets dropped in transit (0 bytes)
+  * Received packets: 9072 (10880881 bytes)
+    | 226 packets received out of order (271200 bytes)
+* ING (server)
+  * Sent packets: 9516 (11412523 bytes)
+    | 0 packets duplicated in transit (0 bytes)
+    | 0 packets marked with the CE ECN codepoint in transit (0 bytes)
+    | 0 packets dropped in transit (0 bytes)
+  * Received packets: 964 (40287 bytes)
+    | 87 packets received out of order (3443 bytes)
+--- Max buffer usage per node ---
+* MRO: 14400 bytes (0 packets dropped due to buffer being full)
+* DSN: 0 bytes (0 packets dropped due to buffer being full)
+* GND: 0 bytes (0 packets dropped due to buffer being full)
+* ING: 0 bytes (0 packets dropped due to buffer being full)
+* M20: 0 bytes (0 packets dropped due to buffer being full)
+* MSL: 0 bytes (0 packets dropped due to buffer being full)
+* MVN: 0 bytes (0 packets dropped due to buffer being full)
+* ODY: 0 bytes (0 packets dropped due to buffer being full)
+* TGO: 0 bytes (0 packets dropped due to buffer being full)
+--- Link stats ---
+* DSN-MRO: 60 packets lost in transit (2358 bytes)
+* MRO-DSN: 78 packets lost in transit (93600 bytes)
