@@ -562,7 +562,7 @@ mod replayed {
             // 9600 is the minimum packet size, so if a link can send less than that per second, it
             // will inevitably appear here as using more bps than available. For that reason, we use
             // a longer window in that case.
-            let window_seconds = if link_bandwidth_bps < 9600 { 5 } else { 1 };
+            let window_seconds = if link_bandwidth_bps < 9600 { 10 } else { 1 };
 
             loop {
                 let Some((first_timestamp, first_size_bits)) =
