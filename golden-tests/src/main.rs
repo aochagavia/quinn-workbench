@@ -73,13 +73,17 @@ fn main() -> anyhow::Result<()> {
             println!("Error running golden test `{name}`");
             match e {
                 TestError::Internal(e) => println!("{e:?}"),
-                TestError::Compare(e) => {
+                TestError::InvalidOutput(e) => {
                     if let Some(diff) = e.replay_log_diff {
                         println!("Expected replay log differs from actual replay log:\n{diff}\n");
                     }
 
                     if let Some(diff) = e.stdout_diff {
                         println!("Expected stdout differs from actual stdout:\n{diff}");
+                    }
+
+                    if !e.stderr.is_empty() {
+                        println!("Non-empty stderr:\n{}", e.stderr);
                     }
                 }
             }
@@ -98,28 +102,25 @@ fn main() -> anyhow::Result<()> {
 
 enum TestError {
     Internal(anyhow::Error),
-    Compare(CompareError),
+    InvalidOutput(InvalidOutput),
 }
 
-struct CompareError {
+struct InvalidOutput {
+    stderr: String,
     stdout_diff: Option<String>,
     replay_log_diff: Option<String>,
 }
 
 fn run_quinn_workbench(test_case: TestCase) -> Result<(), TestError> {
     let workbench_args = test_case.args.split_whitespace();
-    let command = Command::new("cargo")
-        .arg("run")
-        .arg("--release")
-        .arg("--bin")
-        .arg("quinn-workbench")
-        .arg("--")
+    let command = Command::new("./target/release/quinn-workbench")
         .args(workbench_args)
         .output()
         .context("quinn-workbench process crashed")
         .map_err(TestError::Internal)?;
 
     let stdout = String::from_utf8_lossy(&command.stdout);
+    let stderr = String::from_utf8_lossy(&command.stderr);
     let replay_log = std::fs::read_to_string("replay-log.json")
         .context("failed to read replay-log.json")
         .map_err(TestError::Internal)?;
@@ -155,8 +156,9 @@ fn run_quinn_workbench(test_case: TestCase) -> Result<(), TestError> {
         }
     }
 
-    if stdout_diff.is_some() || replay_log_diff.is_some() {
-        Err(TestError::Compare(CompareError {
+    if stdout_diff.is_some() || replay_log_diff.is_some() || !stderr.is_empty() {
+        Err(TestError::InvalidOutput(InvalidOutput {
+            stderr: stderr.into_owned(),
             stdout_diff,
             replay_log_diff,
         }))

@@ -6,6 +6,7 @@ resolver = "2"
 anyhow = "1.0.86"
 bon = "3.3.0"
 clap = { version = "4", features = ["derive"] }
+console = "0.15.11"
 fastrand = { version = "2.1.0" }
 futures-util = "0.3.31"
 parking_lot = "0.12.3"
@@ -18,6 +19,7 @@ rustls = { version = "0.23.8", default-features = false, features = ["ring"] }
 serde = "1.0.203"
 serde_json = "1.0.117"
 serde_with = "3.11.0"
+similar = { version = "2.7.0", features = ["inline"] }
 tokio = { version = "1.37.0", features = ["test-util", "macros"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
