@@ -12,12 +12,14 @@ pub mod route;
 pub mod spec;
 
 use crate::network::event::{NetworkEventPayload, NetworkEvents};
+use crate::network::inbound_queue::InboundQueue;
 use crate::network::node::{Host, HostHandle, Node};
 use crate::network::outbound_buffer::OutboundBuffer;
 use crate::network::spec::{NetworkSpec, NodeKind};
+use crate::quinn_interop::InMemoryUdpSocket;
 use crate::tracing::tracer::SimulationStepTracer;
 use crate::{HOST_PORT, InTransitData, OwnedTransmit};
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use fastrand::Rng;
 use link::NetworkLink;
 use node::Router;
@@ -48,8 +50,9 @@ pub struct InMemoryNetwork {
     routes_by_addr: Arc<HashMap<IpAddr, Arc<Vec<Route>>>>,
     /// Map from ip address pairs to the corresponding links
     links_by_addr: Arc<HashMap<(IpAddr, IpAddr), Arc<Mutex<NetworkLink>>>>,
+    // TODO: remove pub
     /// Map from ids the corresponding links
-    links_by_id: Arc<HashMap<Arc<str>, Arc<Mutex<NetworkLink>>>>,
+    pub links_by_id: Arc<HashMap<Arc<str>, Arc<Mutex<NetworkLink>>>>,
     pub(crate) tracer: Arc<SimulationStepTracer>,
     rng: Mutex<Rng>,
     next_transmit_number: AtomicU64,
@@ -186,19 +189,32 @@ impl InMemoryNetwork {
             next_transmit_number: Default::default(),
         });
 
+        // Forward packets in the background
+        spawn_packet_forwarders(network.clone());
+
         // Process initial events
         for event in events.initial_events {
             network.process_event(event);
         }
 
         // Process events in the background
-        let network_clone = network.clone();
+        let network_clone = Arc::downgrade(&network);
         tokio::spawn(async move {
             for event in events.sorted_events.into_iter() {
                 // Wait until next event should run
                 tokio::time::sleep_until(start + event.relative_time).await;
-                network_clone.process_event(event.payload);
+
+                if let Some(network) = network_clone.upgrade() {
+                    network.process_event(event.payload);
+                } else {
+                    break;
+                }
             }
+
+            // println!(
+            //     "{:.2}s WARN: no more network events left to process. Did the simulation keep running indefinitely?",
+            //     start.elapsed().as_secs_f64()
+            // );
         });
 
         Ok(network)
@@ -271,6 +287,17 @@ impl InMemoryNetwork {
         self.links_by_id[link_id].lock().status_str()
     }
 
+    /// Returns a udp socket for the provided host
+    ///
+    /// Note: creating multiple sockets for a single host results in unspecified behavior
+    pub fn udp_socket_for_host(self: &Arc<InMemoryNetwork>, host: Host) -> InMemoryUdpSocket {
+        InMemoryUdpSocket {
+            host,
+            network: self.clone(),
+            next_packet_delivery: Mutex::new(None),
+        }
+    }
+
     /// Returns a handle to the provided host
     pub fn host_handle(self: &Arc<InMemoryNetwork>, host: Host) -> HostHandle {
         HostHandle {
@@ -315,33 +342,35 @@ impl InMemoryNetwork {
 
         // Wait for 90 days for the packets to arrive
         let days = 90;
-        tokio::time::sleep(Duration::from_secs(3600 * 24 * days)).await;
+        let timeout = Duration::from_secs(3600 * 24 * days);
 
         // Ensure the packets arrived at each host
-        let a_to_b = host_b.inbound.lock().receive(1);
-        let a_to_b_failed = a_to_b.is_empty();
-        let b_to_a = host_a.inbound.lock().receive(1);
-        let b_to_a_failed = b_to_a.is_empty();
+        let a_to_b =
+            tokio::time::timeout(timeout, InboundQueue::receive(host_b.inbound.clone(), 1)).await;
+        let b_to_a =
+            tokio::time::timeout(timeout, InboundQueue::receive(host_a.inbound.clone(), 1)).await;
 
-        if a_to_b_failed || b_to_a_failed {
-            let report = |failed| if failed { "failed" } else { "succeeded" };
-            bail!(
-                "failed to deliver packets between the hosts after {days} days (A to B {}, B to A {})",
-                report(a_to_b_failed),
-                report(b_to_a_failed)
-            );
+        match (a_to_b, b_to_a) {
+            (Ok(a_to_b), Ok(b_to_a)) => {
+                let stepper = self.tracer.stepper();
+                Ok((
+                    stepper
+                        .get_packet_arrived_at(a_to_b[0].data.id, &host_b.id)
+                        .unwrap(),
+                    stepper
+                        .get_packet_arrived_at(b_to_a[0].data.id, &host_a.id)
+                        .unwrap(),
+                ))
+            }
+            (a_to_b, b_to_a) => {
+                let report = |failed| if failed { "failed" } else { "succeeded" };
+                Err(anyhow!(
+                    "failed to deliver packets between the hosts after {days} days (A to B {}, B to A {})",
+                    report(a_to_b.is_err()),
+                    report(b_to_a.is_err())
+                ))
+            }
         }
-
-        let stepper = self.tracer.stepper();
-
-        Ok((
-            stepper
-                .get_packet_arrived_at(a_to_b[0].id, &host_b.id)
-                .unwrap(),
-            stepper
-                .get_packet_arrived_at(b_to_a[0].id, &host_a.id)
-                .unwrap(),
-        ))
     }
 
     /// Resolves the link that should be used to go from the node to the destination
@@ -466,8 +495,6 @@ impl InMemoryNetwork {
             data.transmit.ecn = Some(EcnCodepoint::from_bits(0b11).unwrap())
         }
 
-        let transmit_destination_addr = data.transmit.destination;
-
         let maybe_duplicate = duplicate.then(|| {
             let mut duplicate_data = data.clone();
             duplicate_data.id = self.new_packet_id();
@@ -487,8 +514,10 @@ impl InMemoryNetwork {
                 &current_node,
             );
 
-            let link_is_saturated = !link.lock().has_bandwidth_available(&packet);
-            if link_is_saturated {
+            let link_is_available = link.lock().has_bandwidth_available(&packet);
+            if link_is_available {
+                link.lock().send(&current_node, packet, extra_delay);
+            } else {
                 // Try to enqueue the data on the node's outbound buffer for later sending
                 let outbound_buffer = current_node.outbound_buffer();
                 let data_len = packet.transmit.contents.len();
@@ -501,16 +530,13 @@ impl InMemoryNetwork {
                         packet,
                         extra_delay,
                     );
-                    let network = self.clone();
-                    let link = link.clone();
 
                     // When the packet is finally sent, we can release capacity from the outbound
-                    // buffer and forward the packet
+                    // buffer
                     tokio::spawn(async move {
                         match sent.await {
                             Ok(_) => {
                                 outbound_buffer.release(data_len);
-                                schedule_forward_packet(network, link, transmit_destination_addr);
                             }
                             Err(_) => println!(
                                 "ERROR: channel closed while waiting for bandwidth to become available"
@@ -523,92 +549,59 @@ impl InMemoryNetwork {
                     self.tracer
                         .track_dropped_from_buffer(&packet, &current_node, &link);
                 }
-
-                // The link is saturated, so there's nothing else to do for this packet
-                continue;
             }
-
-            link.lock().send(&current_node, packet, extra_delay);
         }
-
-        schedule_forward_packet(self.clone(), link.clone(), transmit_destination_addr);
     }
 }
 
-fn schedule_forward_packet(
-    network: Arc<InMemoryNetwork>,
-    link: Arc<Mutex<NetworkLink>>,
-    transmit_destination_addr: SocketAddr,
-) {
-    let Some((time_sent, time_received)) = link.lock().next_in_flight_packet_times() else {
-        // There are no packets waiting to be sent in the link (e.g. maybe they were dropped or are
-        // being buffered by the node)
-        return;
-    };
-
-    let tracer = network.tracer.clone();
-    if let Some(router) = network.routers_by_addr.get(&link.lock().target) {
-        // The packet should be forwarded to the next router, after which it needs to be sent to
-        // the next hop (hence the `network.send`)
+fn spawn_packet_forwarders(network: Arc<InMemoryNetwork>) {
+    for link in network.links_by_id.values() {
         let network = network.clone();
-        let router = router.clone();
-        schedule_forward_packet_inner(
-            tracer,
-            link.clone(),
-            time_sent,
-            time_received,
-            move |transmit| {
-                network.forward(Node::Router(router.clone()), transmit);
-            },
-        );
-    } else {
-        // The packet should be forwarded to the final host's inbound queue (from where it will
-        // be automatically picked up by quinn)
-        let host = network
-            .hosts_by_addr
-            .get(&transmit_destination_addr)
-            .unwrap()
-            .clone();
-        let host_queue = host.inbound.clone();
-
-        schedule_forward_packet_inner(
-            tracer,
-            link.clone(),
-            time_sent,
-            time_received,
-            move |transmit| {
-                network
-                    .tracer
-                    .track_packet_in_node(&Node::Host(host.clone()), &transmit);
-                host_queue.lock().send(transmit, Duration::default())
-            },
-        );
-    };
+        let link = link.clone();
+        tokio::spawn(forward_packets_for_link(network, link));
+    }
 }
 
-fn schedule_forward_packet_inner(
-    tracer: Arc<SimulationStepTracer>,
-    link: Arc<Mutex<NetworkLink>>,
-    time_sent: Instant,
-    time_received: Instant,
-    handle_transmit: impl Fn(InTransitData) + Send + 'static,
-) {
-    tokio::spawn(async move {
-        // Take link delay into account
-        tokio::time::sleep_until(time_received).await;
+async fn forward_packets_for_link(network: Arc<InMemoryNetwork>, link: Arc<Mutex<NetworkLink>>) {
+    loop {
+        let next_delivered_packets = {
+            // Ensure we aren't holding the lock after this block
+            let mut lock = link.lock();
+            lock.next_delivered_packets(usize::MAX)
+        };
 
-        // Now receive the packets
-        let mut link = link.lock();
-        let transmits = link.receive(usize::MAX);
+        let delivered = next_delivered_packets.await;
+        assert!(!delivered.is_empty());
 
-        // Only handle the packets if the link didn't go down after sending, otherwise track them as
-        // lost
-        for transmit in transmits {
-            if link.is_up_since(time_sent) {
-                handle_transmit(transmit);
-            } else {
-                tracer.track_lost_in_transit(&transmit, &link);
+        // Forward the packets that were just delivered
+        for transmit in delivered {
+            {
+                // Only handle the packets if the link didn't go down after sending, otherwise track them as
+                // lost
+                let link = link.lock();
+                if link.was_down_after(transmit.sent) {
+                    network.tracer.track_lost_in_transit(&transmit.data, &link);
+                    continue;
+                }
             }
+
+            if let Some(router) = network.routers_by_addr.get(&link.lock().target) {
+                // The next hop is a router, so we forward at the network level
+                network.forward(Node::Router(router.clone()), transmit.data);
+            } else {
+                // The next hop is a host, so we forward directly to the host's inbound queue (from
+                // where it will be automatically picked up by quinn)
+                let host = network
+                    .hosts_by_addr
+                    .get(&transmit.data.transmit.destination)
+                    .unwrap()
+                    .clone();
+                let host_queue = host.inbound.clone();
+                network
+                    .tracer
+                    .track_packet_in_node(&Node::Host(host.clone()), &transmit.data);
+                host_queue.lock().send(transmit.data, Duration::default())
+            };
         }
-    });
+    }
 }

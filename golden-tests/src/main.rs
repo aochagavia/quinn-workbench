@@ -1,11 +1,16 @@
 use anyhow::{Context, bail};
+use std::path::PathBuf;
 use std::process::Command;
 
+static EXPECTED_STDOUT_FILE: &str = "expected-stdout";
+static EXPECTED_REPLAY_LOG_FILE: &str = "expected-replay-log";
+
 struct TestCase {
+    dir: PathBuf,
     name: String,
     args: String,
-    expected_stdout: String,
-    expected_replay_log: String,
+    expected_stdout: Option<String>,
+    expected_replay_log: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -28,24 +33,33 @@ fn main() -> anyhow::Result<()> {
         let args = std::fs::read_to_string(&args_path)
             .with_context(|| format!("no `args` file found at `{}`", args_path.display()))?;
 
-        let stdout_path = path.join("expected-stdout");
-        let stdout = std::fs::read_to_string(&stdout_path).with_context(|| {
-            format!(
-                "no `expected-stdout` file found at `{}`",
-                stdout_path.display()
-            )
-        })?;
+        let stdout_path = path.join(EXPECTED_STDOUT_FILE);
+        let stdout = if stdout_path.is_file() {
+            Some(std::fs::read_to_string(&stdout_path).with_context(|| {
+                format!(
+                    "no `{EXPECTED_STDOUT_FILE}` file found at `{}`",
+                    stdout_path.display()
+                )
+            })?)
+        } else {
+            None
+        };
 
-        let replay_log_path = path.join("expected-replay-log");
-        let replay_log = std::fs::read_to_string(&replay_log_path).with_context(|| {
-            format!(
-                "no `expected-replay-log` file found at `{}`",
-                replay_log_path.display()
-            )
-        })?;
+        let replay_log_path = path.join(EXPECTED_REPLAY_LOG_FILE);
+        let replay_log = if replay_log_path.is_file() {
+            Some(std::fs::read_to_string(&replay_log_path).with_context(|| {
+                format!(
+                    "no `{EXPECTED_REPLAY_LOG_FILE}` file found at `{}`",
+                    replay_log_path.display()
+                )
+            })?)
+        } else {
+            None
+        };
 
         test_cases.push(TestCase {
             name: path.display().to_string(),
+            dir: path,
             args,
             expected_stdout: stdout,
             expected_replay_log: replay_log,
@@ -58,7 +72,7 @@ fn main() -> anyhow::Result<()> {
         if let Err(e) = run_quinn_workbench(test_case) {
             println!("Error running golden test `{name}`");
             match e {
-                TestError::Internal(e) => println!("{e}"),
+                TestError::Internal(e) => println!("{e:?}"),
                 TestError::Compare(e) => {
                     if let Some(diff) = e.replay_log_diff {
                         println!("Expected replay log differs from actual replay log:\n{diff}\n");
@@ -111,16 +125,34 @@ fn run_quinn_workbench(test_case: TestCase) -> Result<(), TestError> {
         .map_err(TestError::Internal)?;
 
     let mut stdout_diff = None;
-    if test_case.expected_stdout != stdout {
-        stdout_diff = Some(diff::diff_to_string(&test_case.expected_stdout, &stdout));
+    match test_case.expected_stdout {
+        Some(expected_stdout) => {
+            if expected_stdout != stdout {
+                stdout_diff = Some(diff::diff_to_string(&expected_stdout, &stdout));
+            }
+        }
+        None => {
+            std::fs::write(test_case.dir.join(EXPECTED_STDOUT_FILE), stdout.as_bytes())
+                .context("failed to persist stdout")
+                .map_err(TestError::Internal)?;
+        }
     }
 
     let mut replay_log_diff = None;
-    if test_case.expected_replay_log != replay_log {
-        replay_log_diff = Some(diff::diff_to_string(
-            &test_case.expected_replay_log,
-            &replay_log,
-        ));
+    match test_case.expected_replay_log {
+        Some(expected_replay_log) => {
+            if expected_replay_log != replay_log {
+                replay_log_diff = Some(diff::diff_to_string(&expected_replay_log, &replay_log));
+            }
+        }
+        None => {
+            std::fs::write(
+                test_case.dir.join(EXPECTED_REPLAY_LOG_FILE),
+                replay_log.as_bytes(),
+            )
+            .context("failed to persist replay log")
+            .map_err(TestError::Internal)?;
+        }
     }
 
     if stdout_diff.is_some() || replay_log_diff.is_some() {

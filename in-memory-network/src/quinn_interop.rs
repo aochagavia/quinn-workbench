@@ -1,12 +1,16 @@
 use crate::OwnedTransmit;
-use crate::network::node::{HostHandle, Node};
+use crate::network::InMemoryNetwork;
+use crate::network::inbound_queue::NextPacketDelivery;
+use crate::network::node::{Host, Node};
+use parking_lot::Mutex;
 use quinn::udp::{RecvMeta, Transmit};
 use quinn::{AsyncUdpSocket, UdpPoller};
+use std::fmt::{Debug, Formatter};
 use std::io::IoSliceMut;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, ready};
 
 #[derive(Debug)]
 pub struct InMemoryUdpPoller;
@@ -17,7 +21,19 @@ impl UdpPoller for InMemoryUdpPoller {
     }
 }
 
-impl AsyncUdpSocket for HostHandle {
+pub struct InMemoryUdpSocket {
+    pub network: Arc<InMemoryNetwork>,
+    pub host: Host,
+    pub next_packet_delivery: Mutex<Option<Pin<Box<NextPacketDelivery>>>>,
+}
+
+impl Debug for InMemoryUdpSocket {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("InMemoryUdpSocket")
+    }
+}
+
+impl AsyncUdpSocket for InMemoryUdpSocket {
     fn create_io_poller(self: Arc<Self>) -> Pin<Box<dyn UdpPoller>> {
         Box::pin(InMemoryUdpPoller)
     }
@@ -47,23 +63,29 @@ impl AsyncUdpSocket for HostHandle {
         bufs: &mut [IoSliceMut<'_>],
         meta: &mut [RecvMeta],
     ) -> Poll<std::io::Result<usize>> {
-        let host = self.network.host_internal(self.addr());
-        let mut inbound = host.inbound.lock();
+        let host = self.network.host_internal(self.host.addr);
 
         let max_transmits = meta.len();
-        let mut received = 0;
+        assert!(meta.len() <= bufs.len());
+
+        let mut lock = self.next_packet_delivery.lock();
+        let delivery = lock.get_or_insert(Box::pin(NextPacketDelivery::new(
+            host.inbound.clone(),
+            max_transmits,
+        )));
+        let delivered = ready!(delivery.as_mut().poll(cx));
+        let delivered_len = delivered.len();
 
         let out = meta.iter_mut().zip(bufs);
-        for (in_transit, (meta, buf)) in inbound.receive(max_transmits).into_iter().zip(out) {
+        for (in_transit, (meta, buf)) in delivered.into_iter().zip(out) {
             self.network
                 .tracer
-                .track_read_by_host(host.id.clone(), &in_transit);
+                .track_read_by_host(host.id.clone(), &in_transit.data);
 
-            received += 1;
-            let transmit = in_transit.transmit;
+            let transmit = in_transit.data.transmit;
 
             // Meta
-            meta.addr = in_transit.source.addr;
+            meta.addr = in_transit.data.source.addr;
             meta.ecn = transmit.ecn;
             meta.dst_ip = Some(transmit.destination.ip());
             meta.len = transmit.contents.len();
@@ -73,15 +95,10 @@ impl AsyncUdpSocket for HostHandle {
             buf[..transmit.contents.len()].copy_from_slice(&transmit.contents);
         }
 
-        if received == 0 {
-            inbound.register_waker(cx.waker().clone());
-            Poll::Pending
-        } else {
-            Poll::Ready(Ok(received))
-        }
+        Poll::Ready(Ok(delivered_len))
     }
 
     fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        Ok(self.addr())
+        Ok(self.host.addr)
     }
 }

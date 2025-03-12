@@ -1,7 +1,7 @@
 use crate::config::quinn::QuinnJsonConfig;
 use anyhow::Context;
 use fastrand::Rng;
-use in_memory_network::network::node::HostHandle;
+use in_memory_network::quinn_interop::InMemoryUdpSocket;
 use parking_lot::Mutex;
 use quinn::Endpoint;
 use quinn_proto::crypto::rustls::QuicClientConfig;
@@ -68,9 +68,12 @@ pub async fn run_connection(
             tx.finish()?;
             tx.stopped().await?;
 
-            rx.read_to_end(usize::MAX)
-                .await
-                .context("failed to read response from server")?;
+            rx.read_to_end(usize::MAX).await.with_context(|| {
+                format!(
+                    "failed to read response from server at {:.2}s",
+                    start.elapsed().as_secs_f64()
+                )
+            })?;
 
             drop(permit);
             Result::<_, anyhow::Error>::Ok(())
@@ -96,7 +99,7 @@ pub async fn run_connection(
 
 pub fn client_endpoint(
     server_cert: CertificateDer<'_>,
-    client_host: HostHandle,
+    client_socket: InMemoryUdpSocket,
     quinn_config: &QuinnJsonConfig,
     quinn_rng: &mut Rng,
 ) -> anyhow::Result<Endpoint> {
@@ -106,7 +109,7 @@ pub fn client_endpoint(
     let mut endpoint = Endpoint::new_with_abstract_socket(
         crate::endpoint_config(seed),
         None,
-        Arc::new(client_host),
+        Arc::new(client_socket),
         quinn::default_runtime().unwrap(),
     )
     .context("failed to create client endpoint")?;

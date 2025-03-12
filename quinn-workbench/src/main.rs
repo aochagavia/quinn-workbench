@@ -96,7 +96,7 @@ async fn run_and_report_stats(
     fs::write(replay_log_path, json_steps).context("failed to store replay log")?;
     println!("* Replay log available at {replay_log_path}");
 
-    println!("--- Stats ---");
+    println!("--- Node stats ---");
     let verified_simulation = tracer
         .verifier()
         .context("failed to create simulation verifier")?
@@ -152,6 +152,18 @@ async fn run_and_report_stats(
         println!(
             "* {node_id}: {} bytes ({} packets dropped due to buffer being full)",
             stats.max_buffer_usage, stats.dropped_buffer_full.packets
+        );
+    }
+
+    if !verified_simulation.stats_by_link.is_empty() {
+        println!("--- Link stats ---");
+    }
+    let mut link_stats: Vec<_> = verified_simulation.stats_by_link.iter().collect();
+    link_stats.sort_unstable_by_key(|(id, _)| *id);
+    for (link_id, stats) in link_stats {
+        println!(
+            "* {link_id}: {} packets lost in transit ({} bytes)",
+            stats.dropped_in_transit.packets, stats.dropped_in_transit.bytes
         );
     }
 

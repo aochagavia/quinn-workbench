@@ -1,19 +1,22 @@
 use crate::InTransitData;
+use parking_lot::Mutex;
 use std::collections::BinaryHeap;
-use std::task::Waker;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll, Waker, ready};
 use std::time::Duration;
-use tokio::time::Instant;
+use tokio::time::{Instant, Sleep};
 
 pub struct InboundQueue {
     queue: BinaryHeap<PrioritizedInTransitData>,
-    notify_new_transmit: Option<Waker>,
+    notify_new_transmits: Vec<Waker>,
 }
 
 impl InboundQueue {
     pub(crate) fn new() -> Self {
         Self {
             queue: BinaryHeap::new(),
-            notify_new_transmit: None,
+            notify_new_transmits: Vec::new(),
         }
     }
 
@@ -24,49 +27,90 @@ impl InboundQueue {
             delay,
         });
 
-        if let Some(waker) = self.notify_new_transmit.take() {
+        for waker in self.notify_new_transmits.drain(..) {
             waker.wake();
         }
     }
 
-    pub(crate) fn register_waker(&mut self, waker: Waker) {
-        if let Some((_, next_read)) = self.next_in_flight_packet_times() {
-            // Wake up next time we can read
-            tokio::task::spawn(async move {
-                tokio::time::sleep_until(next_read).await;
-                waker.wake();
-            });
-        } else {
-            // The queue is empty. Store the waker so we can be notified of new transmits.
-            if self.notify_new_transmit.is_none() {
-                self.notify_new_transmit = Some(waker)
-            }
+    pub(crate) fn receive(this: Arc<Mutex<Self>>, max_transmits: usize) -> NextPacketDelivery {
+        NextPacketDelivery::new(this.clone(), max_transmits)
+    }
+}
+
+pub struct NextPacketDelivery {
+    sleep: Option<Pin<Box<Sleep>>>,
+    queue: Arc<Mutex<InboundQueue>>,
+    max_transmits: usize,
+}
+
+impl NextPacketDelivery {
+    pub fn new(queue: Arc<Mutex<InboundQueue>>, max_transmits: usize) -> Self {
+        Self {
+            sleep: None,
+            queue,
+            max_transmits,
         }
     }
+}
 
-    pub(crate) fn receive(&mut self, max_transmits: usize) -> Vec<InTransitData> {
+impl Future for NextPacketDelivery {
+    type Output = Vec<DeliveredTransmit>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let now = Instant::now();
-        let mut received = Vec::new();
 
-        for _ in 0..max_transmits {
-            if self
-                .queue
-                .peek()
-                .is_some_and(|next| next.arrival_time() <= now)
-            {
-                let data = self.queue.pop().unwrap();
-                received.push(data.data);
-            } else {
+        let mut delivered = Vec::new();
+        loop {
+            if delivered.len() >= self.max_transmits {
                 break;
             }
+
+            if let Some(sleep) = &mut self.sleep {
+                ready!(sleep.as_mut().poll(cx));
+
+                // Sleep has elapsed, so let's get rid of it
+                self.sleep = None;
+            }
+
+            let Some(next_arrival_time) = self
+                .queue
+                .lock()
+                .queue
+                .peek()
+                .map(|next| next.arrival_time())
+            else {
+                // No enqueued packets, so nothing to do
+                break;
+            };
+
+            if next_arrival_time > now {
+                // Sleep in the next iteration until we are allowed to deliver the next packet
+                self.sleep = Some(Box::pin(tokio::time::sleep_until(next_arrival_time)));
+            } else {
+                // Deliver the next packet
+                let data = self.queue.lock().queue.pop().unwrap();
+                delivered.push(DeliveredTransmit {
+                    data: data.data,
+                    sent: data.sent,
+                });
+            }
         }
 
-        received
+        if delivered.is_empty() {
+            self.queue
+                .lock()
+                .notify_new_transmits
+                .push(cx.waker().clone());
+            Poll::Pending
+        } else {
+            Poll::Ready(delivered)
+        }
     }
+}
 
-    pub(crate) fn next_in_flight_packet_times(&self) -> Option<(Instant, Instant)> {
-        self.queue.peek().map(|x| (x.sent, x.arrival_time()))
-    }
+pub struct DeliveredTransmit {
+    pub(crate) data: InTransitData,
+    pub(crate) sent: Instant,
 }
 
 // In transit data, sorted by arrival time

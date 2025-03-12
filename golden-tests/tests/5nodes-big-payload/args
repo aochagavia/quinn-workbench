@@ -1,0 +1,7 @@
+--quinn-config test-data/earth-mars/quinn.json
+--network-graph test-data/earth-mars/networkgraph-5nodes.json
+--network-events test-data/earth-mars/events.json
+--client-ip-address 192.168.40.1
+--server-ip-address 192.168.43.2
+--requests 1
+--response-size 10485760

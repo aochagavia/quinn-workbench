@@ -5,7 +5,7 @@ use crate::tracing::simulation_step::{
 };
 use crate::tracing::simulation_verifier::InvalidSimulation::PacketCreatedByRouterNode;
 use crate::tracing::simulation_verifier::replayed::ReplayedLink;
-use crate::tracing::stats::{NodeStats, PacketStats};
+use crate::tracing::stats::{LinkStats, NodeStats, PacketStats};
 use anyhow::{anyhow, bail};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 pub struct VerifiedSimulation {
     pub stats_by_node: HashMap<Arc<str>, NodeStats>,
+    pub stats_by_link: HashMap<Arc<str>, LinkStats>,
 }
 
 #[derive(Error, Debug)]
@@ -185,6 +186,7 @@ impl SimulationVerifier {
 
         let mut last_step_time = Duration::from_secs(0);
         let mut last_buffer_usage_update = None;
+        let mut stats_by_link: HashMap<_, LinkStats> = HashMap::new();
         for step in steps {
             if step.relative_time != last_step_time {
                 self.update_max_buffer_usage()?;
@@ -250,12 +252,17 @@ impl SimulationVerifier {
                     self.node(&s.node_id)?.packet_dropped(s)?;
                 }
                 SimulationStepKind::PacketLostInTransit(s) => {
-                    let packet = self.in_flight_packets.remove(&s.packet_id);
-                    if packet.is_none() {
+                    let Some(packet) = self.in_flight_packets.remove(&s.packet_id) else {
                         return Err(InvalidSimulation::MissingLostPacket {
                             packet_id: s.packet_id,
                         });
-                    }
+                    };
+
+                    stats_by_link
+                        .entry(s.link_id.clone())
+                        .or_default()
+                        .dropped_in_transit
+                        .track_one(packet.size_bytes);
                 }
                 SimulationStepKind::PacketInTransit(s) => {
                     let packet = self.node(&s.node_id)?.packet_sent(s.packet_id)?;
@@ -301,6 +308,7 @@ impl SimulationVerifier {
                     self.in_flight_packets.insert(
                         s.packet_id,
                         InFlightPacket {
+                            size_bytes: packet.size_bytes,
                             sent_at_relative: step.relative_time,
                             link_id: s.link_id.clone(),
                             extra_delay: packet.extra_delay,
@@ -358,7 +366,10 @@ impl SimulationVerifier {
             })
             .collect();
 
-        Ok(VerifiedSimulation { stats_by_node })
+        Ok(VerifiedSimulation {
+            stats_by_node,
+            stats_by_link,
+        })
     }
 
     fn update_max_buffer_usage(&mut self) -> Result<(), InvalidSimulation> {
@@ -592,6 +603,7 @@ struct ReplayedPacket {
 }
 
 struct InFlightPacket {
+    size_bytes: usize,
     sent_at_relative: Duration,
     extra_delay: Duration,
     link_id: Arc<str>,

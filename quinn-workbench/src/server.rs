@@ -1,7 +1,7 @@
 use crate::config::quinn::QuinnJsonConfig;
 use anyhow::Context;
 use fastrand::Rng;
-use in_memory_network::network::node::HostHandle;
+use in_memory_network::quinn_interop::InMemoryUdpSocket;
 use quinn::Endpoint;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::sync::Arc;
@@ -234,7 +234,7 @@ pub fn server_listen(
 pub fn server_endpoint(
     cert: CertificateDer<'static>,
     key: PrivateKeyDer<'static>,
-    server_host: HostHandle,
+    server_socket: InMemoryUdpSocket,
     quinn_config: &QuinnJsonConfig,
     quinn_rng: &mut Rng,
 ) -> anyhow::Result<Endpoint> {
@@ -246,7 +246,7 @@ pub fn server_endpoint(
     Endpoint::new_with_abstract_socket(
         crate::endpoint_config(seed),
         Some(server_config),
-        Arc::new(server_host),
+        Arc::new(server_socket),
         quinn::default_runtime().unwrap(),
     )
     .context("failed to create server endpoint")

@@ -1,8 +1,6 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
-pub struct NetworkStats {
-    pub by_node: HashMap<Arc<str>, NodeStats>,
+#[derive(Default)]
+pub struct LinkStats {
+    pub dropped_in_transit: PacketStats,
 }
 
 #[derive(Default)]

@@ -43,12 +43,13 @@ mod test {
         NetworkEvent, NetworkEventPayload, NetworkEvents, UpdateLinkStatus,
     };
     use crate::network::ip::Ipv4Cidr;
-    use crate::network::node::{HostHandle, Node};
+    use crate::network::node::Node;
     use crate::network::route::{IpRange, Route};
     use crate::network::spec::{
         NetworkInterface, NetworkLinkSpec, NetworkNodeSpec, NetworkSpec, NodeKind,
     };
     use crate::pcap_exporter::PcapExporter;
+    use crate::quinn_interop::InMemoryUdpSocket;
     use crate::tracing::tracer::SimulationStepTracer;
     use bon::builder;
     use fastrand::Rng;
@@ -291,14 +292,14 @@ mod test {
         let server_endpoint = Endpoint::new_with_abstract_socket(
             EndpointConfig::default(),
             Some(server_config),
-            Arc::new(network.host_handle((*server_socket).clone())),
+            Arc::new(network.udp_socket_for_host((*server_socket).clone())),
             rt.clone(),
         )
         .unwrap();
         let mut client_endpoint = Endpoint::new_with_abstract_socket(
             EndpointConfig::default(),
             None,
-            Arc::new(network.host_handle((*client_socket).clone())),
+            Arc::new(network.udp_socket_for_host((*client_socket).clone())),
             rt,
         )
         .unwrap();
@@ -364,7 +365,7 @@ mod test {
         let mut recv_result = BufsAndMeta::new();
         let received = {
             let host_receive = HostReceive {
-                host_handle: network.host_handle((*server_socket).clone()),
+                host_handle: network.udp_socket_for_host((*server_socket).clone()),
                 result: &mut recv_result,
             };
             host_receive.await.unwrap()
@@ -436,7 +437,7 @@ mod test {
                 let mut recv_result = BufsAndMeta::new();
                 received += {
                     let host_receive = HostReceive {
-                        host_handle: network.host_handle((*server_socket).clone()),
+                        host_handle: network.udp_socket_for_host((*server_socket).clone()),
                         result: &mut recv_result,
                     };
 
@@ -518,7 +519,7 @@ mod test {
         let mut recv_result = BufsAndMeta::new();
         let received = {
             let host_receive = HostReceive {
-                host_handle: network.host_handle((*server_socket).clone()),
+                host_handle: network.udp_socket_for_host((*server_socket).clone()),
                 result: &mut recv_result,
             };
 
@@ -551,7 +552,7 @@ mod test {
 
     // Utility future for testing a Host's `poll_recv`
     struct HostReceive<'a> {
-        host_handle: HostHandle,
+        host_handle: InMemoryUdpSocket,
         result: &'a mut BufsAndMeta,
     }
 

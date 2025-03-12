@@ -1,26 +1,26 @@
 use crate::InTransitData;
 use crate::network::event::UpdateLinkStatus;
-use crate::network::inbound_queue::InboundQueue;
+use crate::network::inbound_queue::{InboundQueue, NextPacketDelivery};
 use crate::network::node::Node;
 use crate::network::spec::NetworkLinkSpec;
 use crate::tracing::tracer::SimulationStepTracer;
 use futures_util::FutureExt;
 use futures_util::future::Shared;
 use parking_lot::Mutex;
-use std::collections::VecDeque;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{cmp, mem};
+use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 pub struct NetworkLink {
     pub id: Arc<str>,
     pub target: IpAddr,
     tracer: Arc<SimulationStepTracer>,
-    queue: InboundQueue,
+    queue: Arc<Mutex<InboundQueue>>,
     rate_calculator: DataRateCalculator,
-    packets_waiting_for_bandwidth: VecDeque<(InTransitData, tokio::sync::oneshot::Sender<()>)>,
+    packets_waiting_for_bandwidth_task: Option<JoinHandle<()>>,
     status: LinkStatus,
     last_down: Option<Instant>,
     delay: Duration,
@@ -71,9 +71,9 @@ impl NetworkLink {
             last_down: None,
             tracer,
             target: l.target,
-            queue: InboundQueue::new(),
+            queue: Arc::new(Mutex::new(InboundQueue::new())),
             rate_calculator: DataRateCalculator::new(l.bandwidth_bps),
-            packets_waiting_for_bandwidth: VecDeque::new(),
+            packets_waiting_for_bandwidth_task: None,
             delay: l.delay,
             congestion_event_ratio: l.congestion_event_ratio,
             packet_loss_ratio: l.packet_loss_ratio,
@@ -83,9 +83,8 @@ impl NetworkLink {
         }
     }
 
-    pub fn is_up_since(&self, instant: Instant) -> bool {
-        let down_after_instant = matches!(self.last_down, Some(down) if down >= instant);
-        !down_after_instant
+    pub fn was_down_after(&self, instant: Instant) -> bool {
+        matches!(self.last_down, Some(down) if down >= instant)
     }
 
     pub(crate) fn status_str(&self) -> &'static str {
@@ -124,7 +123,7 @@ impl NetworkLink {
     }
 
     pub(crate) fn send(&mut self, current_node: &Node, data: InTransitData, extra_delay: Duration) {
-        // Sanity check
+        // Sanity checks
         assert!(
             self.rate_calculator
                 .has_bandwidth_available(Instant::now(), data.transmit.contents.len())
@@ -139,7 +138,7 @@ impl NetworkLink {
         // Send
         self.rate_calculator
             .track_send(data.transmit.contents.len());
-        self.queue.send(data, self.delay + extra_delay);
+        self.queue.lock().send(data, self.delay + extra_delay);
     }
 
     pub(crate) fn send_when_bandwidth_available(
@@ -149,58 +148,46 @@ impl NetworkLink {
         extra_delay: Duration,
     ) -> tokio::sync::oneshot::Receiver<()> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let link = this.clone();
-        let mut link = link.lock();
-        link.packets_waiting_for_bandwidth.push_back((data, tx));
+        let existing_task = this.lock().packets_waiting_for_bandwidth_task.take();
 
-        // We only spawn a task when going from 0 to 1 packet, since the existing task will
-        // handle any packets we add afterwards
-        if link.packets_waiting_for_bandwidth.len() == 1 {
-            tokio::spawn(async move {
-                loop {
-                    // Concurrency: shorten the lock on `this`
-                    let duration_until_enough_bandwidth = {
-                        let link = this.lock();
-                        link.packets_waiting_for_bandwidth.front().map(|(data, _)| {
-                            link.rate_calculator
-                                .duration_until_enough_bandwidth(data.transmit.contents.len())
-                        })
-                    };
-
-                    let Some(duration_until_enough_bandwidth) = duration_until_enough_bandwidth
-                    else {
-                        // No data waiting for bandwidth, we are done
-                        return;
-                    };
-
-                    tokio::time::sleep(duration_until_enough_bandwidth).await;
-
-                    // Concurrency: keep the one-liner to shorten the lock on `this`
-                    let notifier_for_link_up = this.lock().status.notifier_for_link_up();
-                    if let Some(notifier_for_link_up) = notifier_for_link_up {
-                        // The link is currently down, so we need to wait for it to be back up
-                        notifier_for_link_up.await.ok();
-                    }
-
-                    // Concurrency: only lock after all awaits
-                    let mut link = this.lock();
-                    let (data, sent_tx) = link.packets_waiting_for_bandwidth.pop_front().unwrap();
-
-                    // Send
-                    link.send(&node, data, extra_delay);
-
-                    // Notify that the data has been sent
-                    sent_tx.send(()).ok();
+        let this_cp = this.clone();
+        let new_task = tokio::spawn(async move {
+            if let Some(task) = existing_task {
+                // Wait for the previous packet to be sent
+                let result = task.await;
+                if let Err(e) = result {
+                    println!("ERROR: `send_when_bandwidth_available` task crashed. Message: {e}")
                 }
-            });
-        }
+            }
 
+            let duration_until_enough_bandwidth = this
+                .lock()
+                .rate_calculator
+                .duration_until_enough_bandwidth(data.transmit.contents.len());
+            tokio::time::sleep(duration_until_enough_bandwidth).await;
+
+            // Concurrency: keep the one-liner to shorten the lock on `this`
+            let notifier_for_link_up = this.lock().status.notifier_for_link_up();
+            if let Some(notifier_for_link_up) = notifier_for_link_up {
+                // The link is currently down, so we need to wait for it to be back up
+                notifier_for_link_up.await.ok();
+            }
+
+            // Concurrency: only lock after all awaits
+            let mut link = this.lock();
+            link.send(&node, data, extra_delay);
+
+            // Let observers know that the data has been sent
+            tx.send(()).ok();
+        });
+
+        this_cp.lock().packets_waiting_for_bandwidth_task = Some(new_task);
         rx
     }
 
     pub(crate) fn has_bandwidth_available(&mut self, data: &InTransitData) -> bool {
         let at_least_one_packet_waiting_for_bandwidth =
-            !self.packets_waiting_for_bandwidth.is_empty();
+            self.packets_waiting_for_bandwidth_task.is_some();
         if at_least_one_packet_waiting_for_bandwidth || self.status.is_down() {
             return false;
         }
@@ -209,12 +196,8 @@ impl NetworkLink {
             .has_bandwidth_available(Instant::now(), data.transmit.contents.len())
     }
 
-    pub(crate) fn receive(&mut self, max_transmits: usize) -> Vec<InTransitData> {
-        self.queue.receive(max_transmits)
-    }
-
-    pub(crate) fn next_in_flight_packet_times(&self) -> Option<(Instant, Instant)> {
-        self.queue.next_in_flight_packet_times()
+    pub(crate) fn next_delivered_packets(&mut self, max_transmits: usize) -> NextPacketDelivery {
+        NextPacketDelivery::new(self.queue.clone(), max_transmits)
     }
 }
 

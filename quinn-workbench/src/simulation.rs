@@ -119,7 +119,7 @@ impl Simulation {
         let server = server::server_endpoint(
             cert.clone(),
             key.into(),
-            network.host_handle(server_host.clone()),
+            network.udp_socket_for_host(server_host.clone()),
             &config.quinn,
             &mut quinn_rng,
         )?;
@@ -130,7 +130,7 @@ impl Simulation {
         let client_host = network.host(options.client_ip_address);
         let client = client::client_endpoint(
             cert,
-            network.host_handle(client_host.clone()),
+            network.udp_socket_for_host(client_host.clone()),
             &config.quinn,
             &mut quinn_rng,
         )?;
