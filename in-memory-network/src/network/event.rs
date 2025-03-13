@@ -38,13 +38,21 @@ impl NetworkEvent {
 pub struct NetworkEventPayload {
     #[serde(with = "crate::util::serde_arc_str")]
     pub link_id: Arc<str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<UpdateLinkStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bandwidth_bps: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub delay: Option<Duration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub extra_delay: Option<Duration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub extra_delay_ratio: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub packet_duplication_ratio: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub packet_loss_ratio: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub congestion_event_ratio: Option<f64>,
 }
 

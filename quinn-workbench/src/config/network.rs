@@ -20,6 +20,14 @@ struct NetworkNodeJson {
     #[serde(flatten)]
     kind: NetworkNodeKindJson,
     interfaces: Vec<NetworkInterfaceJson>,
+    /// The ratio of packets that will be duplicated upon arriving to the node (the value must be
+    /// between 0 and 1)
+    #[serde(default)]
+    packet_duplication_ratio: f64,
+    /// The ratio of packets that will be lost upon arriving to the node (the value must be between
+    /// 0 and 1)
+    #[serde(default)]
+    packet_loss_ratio: f64,
 }
 
 #[derive(Deserialize, Clone)]
@@ -72,13 +80,6 @@ struct NetworkLinkJson {
     /// (the value must be between 0 and 1)
     #[serde(default)]
     extra_delay_ratio: f64,
-    /// The ratio of packets that will be duplicated upon being sent (the value must be between 0
-    /// and 1)
-    #[serde(default)]
-    packet_duplication_ratio: f64,
-    /// The ratio of packets that will be lost (the value must be between 0 and 1)
-    #[serde(default)]
-    packet_loss_ratio: f64,
     /// The ratio of packets that will be marked with a CE ECN codepoint (the value must be between 0 and 1)
     #[serde(default)]
     congestion_event_ratio: f64,
@@ -121,6 +122,8 @@ impl From<NetworkSpecJson> for in_memory_network::network::spec::NetworkSpec {
                             .collect(),
                     })
                     .collect(),
+                packet_loss_ratio: n.packet_loss_ratio,
+                packet_duplication_ratio: n.packet_duplication_ratio,
             })
             .collect();
 
@@ -139,8 +142,6 @@ impl From<NetworkLinkJson> for in_memory_network::network::spec::NetworkLinkSpec
             delay: Duration::from_millis(l.delay_ms),
             bandwidth_bps: l.bandwidth_bps,
             congestion_event_ratio: l.congestion_event_ratio,
-            packet_loss_ratio: l.packet_loss_ratio,
-            packet_duplication_ratio: l.packet_duplication_ratio,
             extra_delay: Duration::from_millis(l.extra_delay_ms),
             extra_delay_ratio: l.extra_delay_ratio,
         }

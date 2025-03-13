@@ -1,17 +1,21 @@
+use crate::network::InMemoryNetwork;
 use crate::network::inbound_queue::InboundQueue;
+use crate::network::link::NetworkLink;
 use crate::network::outbound_buffer::OutboundBuffer;
 use crate::network::spec::{NetworkNodeSpec, NodeKind};
 use crate::{HOST_PORT, InTransitData};
 use anyhow::bail;
 use parking_lot::Mutex;
 use std::net::{IpAddr, SocketAddr};
+use std::ops::ControlFlow;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
-#[derive(Clone)]
 pub struct Node {
     pub(crate) addresses: Vec<IpAddr>,
     pub(crate) id: Arc<str>,
     pub(crate) quinn_endpoint: Option<Arc<QuinnEndpoint>>,
+    pub(crate) injected_failures: NodeInjectedFailures,
     outbound_buffer: Arc<OutboundBuffer>,
     outbound_tx: tokio::sync::mpsc::UnboundedSender<InTransitData>,
 }
@@ -46,6 +50,7 @@ impl Node {
 
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let host = Self {
+            injected_failures: NodeInjectedFailures::from_spec(&node),
             id: node.id.into(),
             addresses,
             outbound_buffer: Arc::new(OutboundBuffer::new(node.buffer_size_bytes as usize)),
@@ -65,6 +70,7 @@ impl Node {
 
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let node = Node {
+            injected_failures: NodeInjectedFailures::from_spec(&node),
             id: node.id.into(),
             addresses,
             outbound_buffer: Arc::new(OutboundBuffer::new(node.buffer_size_bytes as usize)),
@@ -75,8 +81,42 @@ impl Node {
         Ok((node, rx))
     }
 
-    pub(crate) fn enqueue_outbound(&self, data: InTransitData) {
-        self.outbound_tx.send(data).unwrap()
+    pub(crate) async fn sleep_until_ready_to_send(
+        &self,
+        network: &Arc<InMemoryNetwork>,
+        data: &InTransitData,
+    ) -> Arc<Mutex<NetworkLink>> {
+        let cancellation_token = CancellationToken::new();
+        let mut futures = Vec::new();
+        network.walk_links::<()>(self, data.transmit.destination.ip(), |link| {
+            futures.push(NetworkLink::sleep_until_ready_to_send(
+                link.clone(),
+                data,
+                cancellation_token.clone(),
+            ));
+            ControlFlow::Continue(())
+        });
+
+        let link = futures_util::future::select_all(futures).await.0.unwrap();
+
+        // Ensure the other links stop waiting for this packet to be sendable
+        cancellation_token.cancel();
+
+        link
+    }
+
+    pub(crate) fn enqueue_outbound(&self, network: &Arc<InMemoryNetwork>, data: InTransitData) {
+        // Try to enqueue the data on the node's outbound buffer for later sending
+        let outbound_buffer = self.outbound_buffer();
+        let data_len = data.transmit.contents.len();
+
+        if outbound_buffer.reserve(data_len) {
+            // The buffer has capacity!
+            self.outbound_tx.send(data).unwrap();
+        } else {
+            // The buffer is full and the packet is being dropped
+            network.tracer.track_dropped_from_buffer(&data, self);
+        }
     }
 
     pub fn quic_addr(&self) -> SocketAddr {
@@ -93,6 +133,20 @@ impl Node {
 
     pub fn outbound_buffer(&self) -> Arc<OutboundBuffer> {
         self.outbound_buffer.clone()
+    }
+}
+
+pub struct NodeInjectedFailures {
+    pub(crate) packet_loss_ratio: f64,
+    pub(crate) packet_duplication_ratio: f64,
+}
+
+impl NodeInjectedFailures {
+    pub(crate) fn from_spec(spec: &NetworkNodeSpec) -> Self {
+        Self {
+            packet_loss_ratio: spec.packet_loss_ratio,
+            packet_duplication_ratio: spec.packet_duplication_ratio,
+        }
     }
 }
 

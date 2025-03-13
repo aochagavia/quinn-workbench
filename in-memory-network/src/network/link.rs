@@ -11,22 +11,22 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{cmp, mem};
+use tokio::select;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 pub struct NetworkLink {
     pub id: Arc<str>,
     pub target: IpAddr,
     tracer: Arc<SimulationStepTracer>,
-    queue: Arc<Mutex<InboundQueue>>,
+    in_transit: Arc<Mutex<InboundQueue>>,
     rate_calculator: DataRateCalculator,
     packets_waiting_for_bandwidth_task: Option<JoinHandle<()>>,
     status: LinkStatus,
     last_down: Option<Instant>,
     delay: Duration,
     pub(crate) congestion_event_ratio: f64,
-    pub(crate) packet_loss_ratio: f64,
-    pub(crate) packet_duplication_ratio: f64,
     pub(crate) extra_delay: Duration,
     pub(crate) extra_delay_ratio: f64,
 }
@@ -71,13 +71,11 @@ impl NetworkLink {
             last_down: None,
             tracer,
             target: l.target,
-            queue: Arc::new(Mutex::new(InboundQueue::new())),
+            in_transit: Arc::new(Mutex::new(InboundQueue::new())),
             rate_calculator: DataRateCalculator::new(l.bandwidth_bps),
             packets_waiting_for_bandwidth_task: None,
             delay: l.delay,
             congestion_event_ratio: l.congestion_event_ratio,
-            packet_loss_ratio: l.packet_loss_ratio,
-            packet_duplication_ratio: l.packet_duplication_ratio,
             extra_delay: l.extra_delay,
             extra_delay_ratio: l.extra_delay_ratio,
         }
@@ -138,33 +136,42 @@ impl NetworkLink {
         // Send
         self.rate_calculator
             .track_send(data.transmit.contents.len());
-        self.queue.lock().send(data, self.delay + extra_delay);
+        self.in_transit.lock().send(data, self.delay + extra_delay);
     }
 
-    pub(crate) fn send_when_bandwidth_available(
+    pub(crate) fn sleep_until_ready_to_send(
         this: Arc<Mutex<Self>>,
-        node: Arc<Node>,
-        data: InTransitData,
-        extra_delay: Duration,
-    ) -> tokio::sync::oneshot::Receiver<()> {
+        data: &InTransitData,
+        cancellation_token: CancellationToken,
+    ) -> tokio::sync::oneshot::Receiver<Arc<Mutex<Self>>> {
+        assert!(
+            !this.lock().has_bandwidth_available(data),
+            "we should only wait when no bandwidth is available"
+        );
+
         let (tx, rx) = tokio::sync::oneshot::channel();
         let existing_task = this.lock().packets_waiting_for_bandwidth_task.take();
-
         let this_cp = this.clone();
+        let data_len = data.transmit.contents.len();
         let new_task = tokio::spawn(async move {
             if let Some(task) = existing_task {
-                // Wait for the previous packet to be sent
+                // Wait for the previous packets in the queue to be done
                 let result = task.await;
                 if let Err(e) = result {
-                    println!("ERROR: `send_when_bandwidth_available` task crashed. Message: {e}")
+                    println!("ERROR: `wait_until_bandwidth_available` task crashed. Message: {e}")
                 }
             }
 
             let duration_until_enough_bandwidth = this
                 .lock()
                 .rate_calculator
-                .duration_until_enough_bandwidth(data.transmit.contents.len());
-            tokio::time::sleep(duration_until_enough_bandwidth).await;
+                .duration_until_enough_bandwidth(data_len);
+
+            // Sleep until enough bandwidth or until cancelled, whichever comes first
+            select! {
+                _ = cancellation_token.cancelled() => {}
+                _ = tokio::time::sleep(duration_until_enough_bandwidth) => {}
+            }
 
             // Concurrency: keep the one-liner to shorten the lock on `this`
             let notifier_for_link_up = this.lock().status.notifier_for_link_up();
@@ -173,12 +180,8 @@ impl NetworkLink {
                 notifier_for_link_up.await.ok();
             }
 
-            // Concurrency: only lock after all awaits
-            let mut link = this.lock();
-            link.send(&node, data, extra_delay);
-
-            // Let observers know that the data has been sent
-            tx.send(()).ok();
+            // Let observers know that the link is ready to send
+            tx.send(this).ok();
         });
 
         this_cp.lock().packets_waiting_for_bandwidth_task = Some(new_task);
@@ -197,7 +200,7 @@ impl NetworkLink {
     }
 
     pub(crate) fn next_delivered_packets(&mut self, max_transmits: usize) -> NextPacketDelivery {
-        NextPacketDelivery::new(self.queue.clone(), max_transmits)
+        NextPacketDelivery::new(self.in_transit.clone(), max_transmits)
     }
 }
 

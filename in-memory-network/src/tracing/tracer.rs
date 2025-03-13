@@ -91,12 +91,7 @@ impl SimulationStepTracer {
         );
     }
 
-    pub fn track_dropped_from_buffer(
-        &self,
-        data: &InTransitData,
-        current_node: &Node,
-        link: &NetworkLink,
-    ) {
+    pub fn track_dropped_from_buffer(&self, data: &InTransitData, current_node: &Node) {
         self.record(SimulationStepKind::PacketDropped(PacketDropped {
             packet_id: data.id,
             node_id: current_node.id().clone(),
@@ -106,14 +101,13 @@ impl SimulationStepTracer {
         let first_dropped = self
             .already_warned_dropped_from_buffer
             .lock()
-            .insert(link.id.clone());
+            .insert(current_node.id.clone());
         if first_dropped {
             println!(
-                "{:.2}s WARN packet #{} dropped by node `{}` because the link `{}` was saturated and node buffer was full! (Note: further warnings for this link will be omitted to avoid cluttering the output)",
+                "{:.2}s WARN packet #{} dropped by node `{}` because its outbound buffer is full! (Note: further warnings for this link will be omitted to avoid cluttering the output)",
                 self.simulation_start.elapsed().as_secs_f64(),
                 data.number,
                 current_node.id(),
-                link.id,
             );
         }
     }

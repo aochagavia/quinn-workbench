@@ -151,7 +151,9 @@ fn run_quinn_workbench(test_case: TestCase) -> Result<(), TestError> {
             }
         }
         None => {
-            println!("... expected replay log not found, persisting the current one for future tests");
+            println!(
+                "... expected replay log not found, persisting the current one for future tests"
+            );
             std::fs::write(
                 test_case.dir.join(EXPECTED_REPLAY_LOG_FILE),
                 replay_log.as_bytes(),

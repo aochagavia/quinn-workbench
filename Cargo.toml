@@ -21,6 +21,7 @@ serde_json = "1.0.117"
 serde_with = "3.11.0"
 similar = { version = "2.7.0", features = ["inline"] }
 tokio = { version = "1.37.0", features = ["test-util", "macros"] }
+tokio-util = "0.7.13"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 uuid = { version = "1.11.0" }

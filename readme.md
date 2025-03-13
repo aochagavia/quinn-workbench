@@ -130,12 +130,16 @@ Also, links can be configured individually with the following parameters:
   according to `extra_delay_ratio`.
 - `link.extra_delay_ratio`: The ratio of packets that will have an extra delay applied, used to
   artificially introduce packet reordering (the value must be between 0 and 1).
-- `link.packet_duplication_ratio`: The ratio of packets that will be duplicated upon being sent,
-  (the value must be between 0 and 1).
-- `link.packet_loss_ratio`: The ratio of packets that will be lost during transmission (the value
-  must be between 0 and 1).
 - `link.congestion_event_ratio`: The ratio of packets that will be marked with a CE ECN codepoint
   (the value must be between 0 and 1).
+
+Next to links, nodes can be configured with the following parameters too:
+
+- `node.packet_duplication_ratio`: The ratio of packets that will be duplicated upon arrival to the
+  node, (the value must be between 0 and 1).
+- `node.packet_loss_ratio`: The ratio of packets that will be lost upon arrival to the node (the
+  value must be between 0 and 1).
+
 
 #### Network events config
 

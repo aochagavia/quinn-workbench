@@ -16,6 +16,8 @@ pub struct NetworkNodeSpec {
     pub buffer_size_bytes: u64,
     pub kind: NodeKind,
     pub interfaces: Vec<NetworkInterface>,
+    pub packet_loss_ratio: f64,
+    pub packet_duplication_ratio: f64,
 }
 
 impl NetworkNodeSpec {
@@ -52,8 +54,6 @@ pub struct NetworkLinkSpec {
     pub delay: Duration,
     pub bandwidth_bps: u64,
     pub congestion_event_ratio: f64,
-    pub packet_loss_ratio: f64,
-    pub packet_duplication_ratio: f64,
     pub extra_delay: Duration,
     pub extra_delay_ratio: f64,
 }

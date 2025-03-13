@@ -12,6 +12,7 @@ pcap-file.workspace = true
 pnet_packet.workspace = true
 quinn.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 uuid.workspace = true
 serde.workspace = true
 serde_with.workspace = true

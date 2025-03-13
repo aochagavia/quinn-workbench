@@ -26,6 +26,7 @@ use quinn::udp::EcnCodepoint;
 use route::Route;
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -352,27 +353,38 @@ impl InMemoryNetwork {
     }
 
     /// Resolves the link that should be used to go from the node to the destination
-    fn resolve_link(&self, node: &Node, data: &InTransitData) -> Option<Arc<Mutex<NetworkLink>>> {
-        // If no links are found in the first try, try again allowing local buffering
-        self.resolve_link_internal(node, data, false)
-            .or_else(|| self.resolve_link_internal(node, data, true))
-    }
-
-    fn resolve_link_internal(
+    fn resolve_link(
         &self,
         node: &Node,
         data: &InTransitData,
-        allow_buffering: bool,
-    ) -> Option<Arc<Mutex<NetworkLink>>> {
+    ) -> Result<Arc<Mutex<NetworkLink>>, bool> {
+        let mut has_links = false;
+        let link = self.walk_links(node, data.transmit.destination.ip(), |link| {
+            has_links = true;
+
+            let bandwidth_available = link.lock().has_bandwidth_available(data);
+            if bandwidth_available {
+                ControlFlow::Break(link.clone())
+            } else {
+                ControlFlow::Continue(())
+            }
+        });
+
+        link.ok_or(has_links)
+    }
+
+    /// Walk links in the order in which they would be chosen when sending a packet
+    fn walk_links<T>(
+        &self,
+        node: &Node,
+        dest: IpAddr,
+        mut walk_fn: impl FnMut(&Arc<Mutex<NetworkLink>>) -> ControlFlow<T>,
+    ) -> Option<T> {
         // Prefer direct links if available
         for node_addr in node.addresses() {
-            if let Some(link) = self
-                .links_by_addr
-                .get(&(node_addr, data.transmit.destination.ip()))
-            {
-                let bandwidth_available = link.lock().has_bandwidth_available(data);
-                if bandwidth_available || allow_buffering {
-                    return Some(link.clone());
+            if let Some(link) = self.links_by_addr.get(&(node_addr, dest)) {
+                if let ControlFlow::Break(value) = walk_fn(link) {
+                    return Some(value);
                 }
             }
         }
@@ -380,18 +392,14 @@ impl InMemoryNetwork {
         // Use routing when no direct links are available
         for node_addr in node.addresses() {
             let routes = &self.routes_by_addr[&node_addr];
-            let Some(next_hop_addr) = routes
+            let candidate_links = routes
                 .iter()
-                .find_map(|r| r.next_hop_towards_destination(data.transmit.destination.ip()))
-            else {
-                // No route found for this node's address, try another one
-                continue;
-            };
+                .flat_map(|r| r.next_hop_towards_destination(dest))
+                .flat_map(|next_hop_addr| self.links_by_addr.get(&(node_addr, next_hop_addr)));
 
-            if let Some(link) = self.links_by_addr.get(&(node_addr, next_hop_addr)) {
-                let bandwidth_available = link.lock().has_bandwidth_available(data);
-                if bandwidth_available || allow_buffering {
-                    return Some(link.clone());
+            for link in candidate_links {
+                if let ControlFlow::Break(value) = walk_fn(link) {
+                    return Some(value);
                 }
             }
         }
@@ -438,7 +446,44 @@ impl InMemoryNetwork {
 
         // The packet needs to be transmitted to the next hop. We store it in the node's
         // outbound buffer, and it will automatically be picked up by a background task
-        current_node.enqueue_outbound(data);
+
+        let mut randomly_dropped = false;
+        let mut duplicate = false;
+
+        let roll = self.rng.lock().f64();
+        if roll < current_node.injected_failures.packet_loss_ratio {
+            randomly_dropped = true;
+        } else if roll
+            < current_node.injected_failures.packet_loss_ratio
+                + current_node.injected_failures.packet_duplication_ratio
+        {
+            duplicate = true;
+        }
+
+        if randomly_dropped {
+            self.tracer.track_dropped_randomly(&data, &current_node);
+            return;
+        }
+
+        let maybe_duplicate = duplicate.then(|| {
+            let mut duplicate_data = data.clone();
+            duplicate_data.id = self.new_packet_id();
+            duplicate_data.duplicate = true;
+            duplicate_data
+        });
+
+        current_node.enqueue_outbound(self, data);
+        if let Some(duplicate) = maybe_duplicate {
+            self.tracer.track_injected_failures(
+                &duplicate,
+                true,
+                Duration::default(),
+                false,
+                &current_node,
+            );
+
+            current_node.enqueue_outbound(self, duplicate);
+        }
     }
 }
 
@@ -461,44 +506,38 @@ async fn process_buffer_for_node(
     mut outbound_rx: tokio::sync::mpsc::UnboundedReceiver<InTransitData>,
 ) {
     while let Some(mut data) = outbound_rx.recv().await {
-        let Some(link) = network.resolve_link(&node, &data) else {
-            let nodes = network.tracer.stepper().get_packet_path(data.id);
-            let mut path = nodes.join(" -> ");
-            path.push_str(" -> ?");
+        let link = match network.resolve_link(&node, &data) {
+            Ok(link) => link,
+            Err(true) => {
+                // No link available at the moment, sleep until a link becomes available
+                node.sleep_until_ready_to_send(&network, &data).await
+            }
+            Err(false) => {
+                // No route available at all!
+                let nodes = network.tracer.stepper().get_packet_path(data.id);
+                let mut path = nodes.join(" -> ");
+                path.push_str(" -> ?");
 
-            println!(
-                "Network error: missing link to {} ({path})",
-                data.transmit.destination
-            );
-            return;
+                println!(
+                    "Network error: missing link to {} ({path})",
+                    data.transmit.destination
+                );
+                return;
+            }
         };
 
-        let mut randomly_dropped = false;
-        let mut duplicate = false;
+        node.outbound_buffer().release(data.transmit.contents.len());
         let congestion_experienced;
         let mut extra_delay = Duration::from_secs(0);
 
         // Concurrency: limit the lock guard's lifetime
         {
             let link = link.lock();
-            let roll1 = network.rng.lock().f64();
-            if roll1 < link.packet_loss_ratio {
-                randomly_dropped = true;
-            } else if roll1 < link.packet_loss_ratio + link.packet_duplication_ratio {
-                duplicate = true;
-            }
-
-            let roll2 = network.rng.lock().f64();
-            if roll2 < link.extra_delay_ratio {
+            if network.rng.lock().f64() < link.extra_delay_ratio {
                 extra_delay = link.extra_delay;
             }
 
             congestion_experienced = network.rng.lock().f64() < link.congestion_event_ratio;
-        }
-
-        if randomly_dropped {
-            network.tracer.track_dropped_randomly(&data, &node);
-            return;
         }
 
         if congestion_experienced {
@@ -513,63 +552,7 @@ async fn process_buffer_for_node(
             data.transmit.ecn = Some(EcnCodepoint::from_bits(0b11).unwrap())
         }
 
-        let maybe_duplicate = duplicate.then(|| {
-            let mut duplicate_data = data.clone();
-            duplicate_data.id = network.new_packet_id();
-            duplicate_data.duplicate = true;
-            duplicate_data
-        });
-
-        let mut packets = vec![data];
-        packets.extend(maybe_duplicate);
-
-        for packet in packets.into_iter() {
-            network.tracer.track_injected_failures(
-                &packet,
-                duplicate && packet.duplicate,
-                extra_delay,
-                congestion_experienced,
-                &node,
-            );
-
-            let link_is_available = link.lock().has_bandwidth_available(&packet);
-            if link_is_available {
-                link.lock().send(&node, packet, extra_delay);
-            } else {
-                // Try to enqueue the data on the node's outbound buffer for later sending
-                let outbound_buffer = node.outbound_buffer();
-                let data_len = packet.transmit.contents.len();
-
-                if outbound_buffer.reserve(data_len) {
-                    // The buffer has capacity!
-                    let sent = NetworkLink::send_when_bandwidth_available(
-                        link.clone(),
-                        node.clone(),
-                        packet,
-                        extra_delay,
-                    );
-
-                    // When the packet is finally sent, we can release capacity from the outbound
-                    // buffer
-                    tokio::spawn(async move {
-                        match sent.await {
-                            Ok(_) => {
-                                outbound_buffer.release(data_len);
-                            }
-                            Err(_) => println!(
-                                "ERROR: channel closed while waiting for bandwidth to become available"
-                            ),
-                        }
-                    });
-                } else {
-                    // The buffer is full and the packet is being dropped
-                    let link = link.lock();
-                    network
-                        .tracer
-                        .track_dropped_from_buffer(&packet, &node, &link);
-                }
-            }
-        }
+        link.lock().send(&node, data, extra_delay);
     }
 }
 
