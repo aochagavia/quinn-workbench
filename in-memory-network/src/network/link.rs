@@ -143,7 +143,7 @@ impl NetworkLink {
 
     pub(crate) fn send_when_bandwidth_available(
         this: Arc<Mutex<Self>>,
-        node: Node,
+        node: Arc<Node>,
         data: InTransitData,
         extra_delay: Duration,
     ) -> tokio::sync::oneshot::Receiver<()> {

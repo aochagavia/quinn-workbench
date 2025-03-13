@@ -86,7 +86,7 @@ impl SimulationStepTracer {
         println!(
             "{:.2}s WARN {} packet lost (#{})!",
             self.simulation_start.elapsed().as_secs_f64(),
-            data.source.id,
+            data.source_id,
             data.number,
         );
     }
@@ -190,10 +190,9 @@ impl SimulationStepTracer {
     }
 
     pub fn track_sent_in_pcap(&self, data: &InTransitData, current_node: &Node) {
-        // The pcap exporter should only track packets as they get sent from a host
-        if let Node::Host(source) = current_node {
+        if let Some(endpoint) = &current_node.quinn_endpoint {
             self.pcap_exporter
-                .track_packet(data, &source.addr, data.transmit.ecn);
+                .track_packet(data, &endpoint.addr, data.transmit.ecn);
         };
     }
 }

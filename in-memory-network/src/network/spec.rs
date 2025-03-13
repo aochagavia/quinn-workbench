@@ -18,6 +18,20 @@ pub struct NetworkNodeSpec {
     pub interfaces: Vec<NetworkInterface>,
 }
 
+impl NetworkNodeSpec {
+    pub fn addresses(&self) -> Vec<IpAddr> {
+        self.interfaces
+            .iter()
+            .flat_map(|i| {
+                i.addresses
+                    .iter()
+                    .map(|a| a.as_ip_addr())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum NodeKind {
     Host,

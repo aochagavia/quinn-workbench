@@ -13,21 +13,19 @@ pub mod spec;
 
 use crate::network::event::{NetworkEventPayload, NetworkEvents};
 use crate::network::inbound_queue::InboundQueue;
-use crate::network::node::{Host, HostHandle, Node};
-use crate::network::outbound_buffer::OutboundBuffer;
+use crate::network::node::Node;
 use crate::network::spec::{NetworkSpec, NodeKind};
 use crate::quinn_interop::InMemoryUdpSocket;
 use crate::tracing::tracer::SimulationStepTracer;
-use crate::{HOST_PORT, InTransitData, OwnedTransmit};
+use crate::{InTransitData, OwnedTransmit};
 use anyhow::{anyhow, bail};
 use fastrand::Rng;
 use link::NetworkLink;
-use node::Router;
 use parking_lot::Mutex;
 use quinn::udp::EcnCodepoint;
 use route::Route;
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -42,17 +40,14 @@ pub struct PacketArrived {
 
 /// A network between two hosts, with multiple routers in between
 pub struct InMemoryNetwork {
-    /// Map from socket addresses to the corresponding host object
-    hosts_by_addr: HashMap<SocketAddr, Host>,
-    /// Map from ip addresses to the corresponding router object
-    routers_by_addr: Arc<HashMap<IpAddr, Arc<Router>>>,
+    /// Map from ip addresses to the corresponding nodes
+    nodes_by_addr: Arc<HashMap<IpAddr, Arc<Node>>>,
     /// Map from ip addresses to the available route information
     routes_by_addr: Arc<HashMap<IpAddr, Arc<Vec<Route>>>>,
     /// Map from ip address pairs to the corresponding links
     links_by_addr: Arc<HashMap<(IpAddr, IpAddr), Arc<Mutex<NetworkLink>>>>,
-    // TODO: remove pub
     /// Map from ids the corresponding links
-    pub links_by_id: Arc<HashMap<Arc<str>, Arc<Mutex<NetworkLink>>>>,
+    links_by_id: Arc<HashMap<Arc<str>, Arc<Mutex<NetworkLink>>>>,
     pub(crate) tracer: Arc<SimulationStepTracer>,
     rng: Mutex<Rng>,
     next_transmit_number: AtomicU64,
@@ -98,15 +93,14 @@ impl InMemoryNetwork {
             );
         }
 
-        let mut hosts_by_addr = HashMap::new();
+        let mut nodes_by_addr = HashMap::new();
         for host in hosts {
-            let h = Host::from_network_node(host)?;
-            let already_existing = hosts_by_addr.insert(h.addr, h);
-
-            if let Some(host) = already_existing {
+            let (h, endpoint) = Node::host(host)?;
+            let already_existing = nodes_by_addr.insert(endpoint.addr.ip(), Arc::new(h));
+            if already_existing.is_some() {
                 bail!(
-                    "Expected hosts to have unique ip addresses, but at least two hosts are using {}",
-                    host.addr.ip()
+                    "Expected quic endpoints to have unique ip addresses, but at least two endpoints are using {}",
+                    endpoint.addr.ip()
                 );
             }
         }
@@ -136,40 +130,21 @@ impl InMemoryNetwork {
             }
         }
 
-        let mut routers_by_addr = HashMap::new();
         for r in routers {
-            let addresses: Vec<_> = r
-                .interfaces
-                .into_iter()
-                .flat_map(|i| {
-                    i.addresses
-                        .iter()
-                        .map(|a| a.as_ip_addr())
-                        .collect::<Vec<_>>()
-                })
-                .collect();
-            if addresses.is_empty() {
-                bail!("found router with no addresses: {}", r.id);
-            }
+            let router = Arc::new(Node::router(r)?);
 
             let mut inbound_links = HashMap::new();
             for (&(source, target), link) in &links_by_addr {
-                if addresses.contains(&target) {
+                if router.addresses.contains(&target) {
                     inbound_links.insert(source, link.clone());
                 }
             }
 
-            let router = Arc::new(Router {
-                id: r.id.into(),
-                addresses: addresses.clone(),
-                outbound_buffer: Arc::new(OutboundBuffer::new(r.buffer_size_bytes as usize)),
-            });
-
-            for address in addresses {
-                let address_taken = routers_by_addr.insert(address, router.clone());
+            for &address in &router.addresses {
+                let address_taken = nodes_by_addr.insert(address, router.clone());
                 if let Some(conflicting_router) = address_taken {
                     bail!(
-                        "routers {} and {} share the same address: {}",
+                        "nodes {} and {} share the same address: {}",
                         router.id,
                         conflicting_router.id,
                         address
@@ -179,8 +154,7 @@ impl InMemoryNetwork {
         }
 
         let network = Arc::new(Self {
-            hosts_by_addr,
-            routers_by_addr: Arc::new(routers_by_addr),
+            nodes_by_addr: Arc::new(nodes_by_addr),
             routes_by_addr: Arc::new(routes_by_addr),
             links_by_addr: Arc::new(links_by_addr),
             links_by_id: Arc::new(links_by_id),
@@ -211,10 +185,10 @@ impl InMemoryNetwork {
                 }
             }
 
-            // println!(
-            //     "{:.2}s WARN: no more network events left to process. Did the simulation keep running indefinitely?",
-            //     start.elapsed().as_secs_f64()
-            // );
+            println!(
+                "{:.2}s WARN: no more network events left to process. Did the simulation keep running indefinitely?",
+                start.elapsed().as_secs_f64()
+            );
         });
 
         Ok(network)
@@ -287,57 +261,45 @@ impl InMemoryNetwork {
         self.links_by_id[link_id].lock().status_str()
     }
 
-    /// Returns a udp socket for the provided host
+    /// Returns a udp socket for the provided host node
     ///
-    /// Note: creating multiple sockets for a single host results in unspecified behavior
-    pub fn udp_socket_for_host(self: &Arc<InMemoryNetwork>, host: Host) -> InMemoryUdpSocket {
+    /// Note: creating multiple sockets for a single node results in unspecified behavior
+    pub fn udp_socket_for_node(self: &Arc<InMemoryNetwork>, node: Arc<Node>) -> InMemoryUdpSocket {
         InMemoryUdpSocket {
-            host,
+            endpoint: node.quinn_endpoint.as_ref().unwrap().clone(),
+            node,
             network: self.clone(),
             next_packet_delivery: Mutex::new(None),
         }
     }
 
-    /// Returns a handle to the provided host
-    pub fn host_handle(self: &Arc<InMemoryNetwork>, host: Host) -> HostHandle {
-        HostHandle {
-            host,
-            network: self.clone(),
-        }
-    }
-
     /// Returns the host bound to the provided address
-    pub fn host(self: &InMemoryNetwork, ip: IpAddr) -> &Host {
-        &self.hosts_by_addr[&SocketAddr::new(ip, HOST_PORT)]
-    }
-
-    /// Returns the host bound to the provided address
-    pub(crate) fn host_internal(&self, addr: SocketAddr) -> &Host {
-        &self.hosts_by_addr[&addr]
+    pub fn host(self: &InMemoryNetwork, ip: IpAddr) -> &Arc<Node> {
+        let node = &self.nodes_by_addr[&ip];
+        assert!(node.quinn_endpoint.is_some(), "not a host");
+        node
     }
 
     pub async fn assert_connectivity_between_hosts(
         self: &Arc<Self>,
-        host_a_addr: IpAddr,
-        host_b_addr: IpAddr,
+        host_a: &Arc<Node>,
+        host_b: &Arc<Node>,
     ) -> anyhow::Result<(Duration, Duration)> {
-        let host_a = self.host(host_a_addr);
-        let host_b = self.host(host_b_addr);
         let peers = [(host_a, host_b), (host_b, host_a)];
 
         // Send a packet both ways
         for (source, target) in peers {
             let data = self.in_transit_data(
-                source.clone(),
+                source,
                 OwnedTransmit {
-                    destination: target.addr,
+                    destination: target.quinn_endpoint.as_ref().unwrap().addr,
                     ecn: None,
                     contents: vec![42],
                     segment_size: None,
                 },
             );
 
-            self.forward(Node::Host(source.clone()), data);
+            self.forward(source.clone(), data);
         }
 
         // Wait for 90 days for the packets to arrive
@@ -345,10 +307,16 @@ impl InMemoryNetwork {
         let timeout = Duration::from_secs(3600 * 24 * days);
 
         // Ensure the packets arrived at each host
-        let a_to_b =
-            tokio::time::timeout(timeout, InboundQueue::receive(host_b.inbound.clone(), 1)).await;
-        let b_to_a =
-            tokio::time::timeout(timeout, InboundQueue::receive(host_a.inbound.clone(), 1)).await;
+        let a_to_b = tokio::time::timeout(
+            timeout,
+            InboundQueue::receive(host_b.quinn_endpoint.as_ref().unwrap().inbound.clone(), 1),
+        )
+        .await;
+        let b_to_a = tokio::time::timeout(
+            timeout,
+            InboundQueue::receive(host_a.quinn_endpoint.as_ref().unwrap().inbound.clone(), 1),
+        )
+        .await;
 
         match (a_to_b, b_to_a) {
             (Ok(a_to_b), Ok(b_to_a)) => {
@@ -421,11 +389,12 @@ impl InMemoryNetwork {
         None
     }
 
-    pub(crate) fn in_transit_data(&self, source: Host, transmit: OwnedTransmit) -> InTransitData {
+    pub(crate) fn in_transit_data(&self, source: &Node, transmit: OwnedTransmit) -> InTransitData {
         InTransitData {
             id: self.new_packet_id(),
             duplicate: false,
-            source,
+            source_id: source.id.clone(),
+            source_endpoint: source.quinn_endpoint.as_ref().unwrap().clone(),
             transmit,
             number: self.next_transmit_number.fetch_add(1, Ordering::Relaxed),
         }
@@ -438,10 +407,23 @@ impl InMemoryNetwork {
     /// buffer for later sending (or drops it when the buffer is full).
     pub(crate) fn forward(
         self: &Arc<InMemoryNetwork>,
-        current_node: Node,
+        current_node: Arc<Node>,
         mut data: InTransitData,
     ) {
         self.tracer.track_packet_in_node(&current_node, &data);
+
+        if let Some(quinn_endpoint) = &current_node.quinn_endpoint {
+            if quinn_endpoint.addr == data.transmit.destination {
+                // The packet has arrived to a quinn endpoint, so we forward it directly to the nodes's
+                // inbound queue (from where it will be automatically picked up by quinn)
+                quinn_endpoint
+                    .inbound
+                    .clone()
+                    .lock()
+                    .send(data, Duration::default());
+                return;
+            }
+        }
 
         let Some(link) = self.resolve_link(&current_node, &data) else {
             let nodes = self.tracer.stepper().get_packet_path(data.id);
@@ -585,23 +567,8 @@ async fn forward_packets_for_link(network: Arc<InMemoryNetwork>, link: Arc<Mutex
                 }
             }
 
-            if let Some(router) = network.routers_by_addr.get(&link.lock().target) {
-                // The next hop is a router, so we forward at the network level
-                network.forward(Node::Router(router.clone()), transmit.data);
-            } else {
-                // The next hop is a host, so we forward directly to the host's inbound queue (from
-                // where it will be automatically picked up by quinn)
-                let host = network
-                    .hosts_by_addr
-                    .get(&transmit.data.transmit.destination)
-                    .unwrap()
-                    .clone();
-                let host_queue = host.inbound.clone();
-                network
-                    .tracer
-                    .track_packet_in_node(&Node::Host(host.clone()), &transmit.data);
-                host_queue.lock().send(transmit.data, Duration::default())
-            };
+            let node = &network.nodes_by_addr[&link.lock().target];
+            network.forward(node.clone(), transmit.data);
         }
     }
 }

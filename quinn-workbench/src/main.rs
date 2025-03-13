@@ -102,15 +102,15 @@ async fn run_and_report_stats(
         .context("failed to create simulation verifier")?
         .verify()
         .context("failed to verify simulation")?;
-    let server_host = network.host(options.server_ip_address);
-    let client_host = network.host(options.client_ip_address);
+    let server_node = network.host(options.server_ip_address);
+    let client_node = network.host(options.client_ip_address);
     for node in ["client", "server"] {
         let name = match node {
-            "server" => &network.host(server_host.addr.ip()).id,
-            "client" => &network.host(client_host.addr.ip()).id,
+            "server" => server_node.id().clone(),
+            "client" => client_node.id().clone(),
             _ => unreachable!(),
         };
-        let stats = &verified_simulation.stats_by_node[name];
+        let stats = &verified_simulation.stats_by_node[&name];
 
         println!("* {name} ({node})");
 

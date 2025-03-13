@@ -6,10 +6,11 @@ pub mod quinn_interop;
 pub mod tracing;
 mod util;
 
-use crate::network::node::Host;
+use crate::network::node::QuinnEndpoint;
 use quinn::udp::EcnCodepoint;
 use std::fmt::Debug;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 const HOST_PORT: u16 = 8080;
 
@@ -30,7 +31,8 @@ struct OwnedTransmit {
 pub struct InTransitData {
     id: uuid::Uuid,
     duplicate: bool,
-    source: Host,
+    source_endpoint: Arc<QuinnEndpoint>,
+    source_id: Arc<str>,
     transmit: OwnedTransmit,
     number: u64,
 }
@@ -43,7 +45,6 @@ mod test {
         NetworkEvent, NetworkEventPayload, NetworkEvents, UpdateLinkStatus,
     };
     use crate::network::ip::Ipv4Cidr;
-    use crate::network::node::Node;
     use crate::network::route::{IpRange, Route};
     use crate::network::spec::{
         NetworkInterface, NetworkLinkSpec, NetworkNodeSpec, NetworkSpec, NodeKind,
@@ -281,8 +282,8 @@ mod test {
 
         // Network
         let network = default_network().call();
-        let server_socket = Arc::new(network.host(SERVER_ADDR.as_ip_addr()));
-        let client_socket = Arc::new(network.host(CLIENT_ADDR.as_ip_addr()));
+        let server_socket = network.host(SERVER_ADDR.as_ip_addr());
+        let client_socket = network.host(CLIENT_ADDR.as_ip_addr());
 
         // QUIC config
         let (server_name, server_cert, server_config) = default_server_config();
@@ -292,14 +293,14 @@ mod test {
         let server_endpoint = Endpoint::new_with_abstract_socket(
             EndpointConfig::default(),
             Some(server_config),
-            Arc::new(network.udp_socket_for_host((*server_socket).clone())),
+            Arc::new(network.udp_socket_for_node(server_socket.clone())),
             rt.clone(),
         )
         .unwrap();
         let mut client_endpoint = Endpoint::new_with_abstract_socket(
             EndpointConfig::default(),
             None,
-            Arc::new(network.udp_socket_for_host((*client_socket).clone())),
+            Arc::new(network.udp_socket_for_node(client_socket.clone())),
             rt,
         )
         .unwrap();
@@ -320,7 +321,7 @@ mod test {
 
         // Make a request from the client
         let client_conn = client_endpoint
-            .connect(server_socket.addr, server_name)
+            .connect(server_socket.quic_addr(), server_name)
             .unwrap()
             .await
             .unwrap();
@@ -339,33 +340,33 @@ mod test {
     async fn test_packet_arrives_at_expected_time() {
         // Sanity check
         let network = default_network().call();
-        let server_socket = Arc::new(network.host(SERVER_ADDR.as_ip_addr()));
-        let client_socket = Arc::new(network.host(CLIENT_ADDR.as_ip_addr()));
+        let server_node = network.host(SERVER_ADDR.as_ip_addr());
+        let client_node = network.host(CLIENT_ADDR.as_ip_addr());
         network
-            .assert_connectivity_between_hosts(server_socket.addr.ip(), client_socket.addr.ip())
+            .assert_connectivity_between_hosts(server_node, client_node)
             .await
             .unwrap();
 
         // Test
         let network = default_network().call();
-        let server_socket = Arc::new(network.host(SERVER_ADDR.as_ip_addr()));
-        let client_socket = Arc::new(network.host(CLIENT_ADDR.as_ip_addr()));
+        let server_socket = network.host(SERVER_ADDR.as_ip_addr());
+        let client_socket = network.host(CLIENT_ADDR.as_ip_addr());
         let data = network.in_transit_data(
-            (*client_socket).clone(),
+            &client_socket,
             OwnedTransmit {
-                destination: server_socket.addr,
+                destination: server_socket.quic_addr(),
                 ecn: None,
                 contents: b"hello world".to_vec(),
                 segment_size: None,
             },
         );
         let packet_id = data.id;
-        network.forward(Node::Host((*client_socket).clone()), data);
+        network.forward(client_socket.clone(), data);
 
         let mut recv_result = BufsAndMeta::new();
         let received = {
             let host_receive = HostReceive {
-                host_handle: network.udp_socket_for_host((*server_socket).clone()),
+                socket: network.udp_socket_for_node((*server_socket).clone()),
                 result: &mut recv_result,
             };
             host_receive.await.unwrap()
@@ -404,24 +405,24 @@ mod test {
         for (bandwidth, expected_delay) in bandwidths_and_delays {
             // Sanity check
             let network = default_network().bandwidth_bps(bandwidth).call();
-            let server_socket = Arc::new(network.host(SERVER_ADDR.as_ip_addr()));
-            let client_socket = Arc::new(network.host(CLIENT_ADDR.as_ip_addr()));
+            let server_node = network.host(SERVER_ADDR.as_ip_addr());
+            let client_node = network.host(CLIENT_ADDR.as_ip_addr());
             network
-                .assert_connectivity_between_hosts(client_socket.addr.ip(), server_socket.addr.ip())
+                .assert_connectivity_between_hosts(client_node, server_node)
                 .await
                 .unwrap();
 
             // Actual test
             let network = default_network().bandwidth_bps(bandwidth).call();
-            let server_socket = Arc::new(network.host(SERVER_ADDR.as_ip_addr()));
-            let client_socket = Arc::new(network.host(CLIENT_ADDR.as_ip_addr()));
+            let server_socket = network.host(SERVER_ADDR.as_ip_addr());
+            let client_socket = network.host(CLIENT_ADDR.as_ip_addr());
 
             let mut packet_ids = Vec::new();
             for _ in 0..4 {
                 let data = network.in_transit_data(
-                    (*client_socket).clone(),
+                    &client_socket,
                     OwnedTransmit {
-                        destination: network.host_handle((*server_socket).clone()).addr(),
+                        destination: server_socket.quic_addr(),
                         ecn: None,
                         contents: vec![42; 1200],
                         segment_size: None,
@@ -429,7 +430,7 @@ mod test {
                 );
 
                 packet_ids.push(data.id);
-                network.forward(Node::Host((*client_socket).clone()), data.clone());
+                network.forward(client_socket.clone(), data.clone());
             }
 
             let mut received = 0;
@@ -437,7 +438,7 @@ mod test {
                 let mut recv_result = BufsAndMeta::new();
                 received += {
                     let host_receive = HostReceive {
-                        host_handle: network.udp_socket_for_host((*server_socket).clone()),
+                        socket: network.udp_socket_for_node(server_socket.clone()),
                         result: &mut recv_result,
                     };
 
@@ -501,13 +502,13 @@ mod test {
             ])
             .call();
 
-        let server_socket = Arc::new(network.host(SERVER_ADDR.as_ip_addr()));
-        let client_socket = Arc::new(network.host(CLIENT_ADDR.as_ip_addr()));
+        let server_socket = network.host(SERVER_ADDR.as_ip_addr());
+        let client_socket = network.host(CLIENT_ADDR.as_ip_addr());
 
         let data = network.in_transit_data(
-            (*client_socket).clone(),
+            &client_socket,
             OwnedTransmit {
-                destination: network.host_handle((*server_socket).clone()).host.addr,
+                destination: server_socket.quic_addr(),
                 ecn: None,
                 contents: vec![42; 1200],
                 segment_size: None,
@@ -515,11 +516,11 @@ mod test {
         );
         let packet_id = data.id;
 
-        network.forward(Node::Host((*client_socket).clone()), data.clone());
+        network.forward(client_socket.clone(), data.clone());
         let mut recv_result = BufsAndMeta::new();
         let received = {
             let host_receive = HostReceive {
-                host_handle: network.udp_socket_for_host((*server_socket).clone()),
+                socket: network.udp_socket_for_node((*server_socket).clone()),
                 result: &mut recv_result,
             };
 
@@ -552,7 +553,7 @@ mod test {
 
     // Utility future for testing a Host's `poll_recv`
     struct HostReceive<'a> {
-        host_handle: InMemoryUdpSocket,
+        socket: InMemoryUdpSocket,
         result: &'a mut BufsAndMeta,
     }
 
@@ -576,12 +577,12 @@ mod test {
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             let this = &mut *self;
 
-            let host_handle = &mut this.host_handle;
+            let socket = &mut this.socket;
             let bufs = &mut this.result.bufs;
             let meta = &mut this.result.meta;
 
             let mut bufs: Vec<_> = bufs.iter_mut().map(|b| IoSliceMut::new(b)).collect();
-            host_handle.poll_recv(cx, &mut bufs, meta)
+            socket.poll_recv(cx, &mut bufs, meta)
         }
     }
 }

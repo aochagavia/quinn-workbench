@@ -1,7 +1,7 @@
 use crate::OwnedTransmit;
 use crate::network::InMemoryNetwork;
 use crate::network::inbound_queue::NextPacketDelivery;
-use crate::network::node::{Host, Node};
+use crate::network::node::{Node, QuinnEndpoint};
 use parking_lot::Mutex;
 use quinn::udp::{RecvMeta, Transmit};
 use quinn::{AsyncUdpSocket, UdpPoller};
@@ -23,7 +23,8 @@ impl UdpPoller for InMemoryUdpPoller {
 
 pub struct InMemoryUdpSocket {
     pub network: Arc<InMemoryNetwork>,
-    pub host: Host,
+    pub endpoint: Arc<QuinnEndpoint>,
+    pub node: Arc<Node>,
     pub next_packet_delivery: Mutex<Option<Pin<Box<NextPacketDelivery>>>>,
 }
 
@@ -44,7 +45,7 @@ impl AsyncUdpSocket for InMemoryUdpSocket {
         assert!(transmit.segment_size.is_none());
 
         let data = self.network.in_transit_data(
-            self.host.clone(),
+            &self.node,
             OwnedTransmit {
                 destination: transmit.destination,
                 ecn: transmit.ecn,
@@ -52,7 +53,7 @@ impl AsyncUdpSocket for InMemoryUdpSocket {
                 segment_size: transmit.segment_size,
             },
         );
-        self.network.forward(Node::Host(self.host.clone()), data);
+        self.network.forward(self.node.clone(), data);
 
         Ok(())
     }
@@ -63,14 +64,13 @@ impl AsyncUdpSocket for InMemoryUdpSocket {
         bufs: &mut [IoSliceMut<'_>],
         meta: &mut [RecvMeta],
     ) -> Poll<std::io::Result<usize>> {
-        let host = self.network.host_internal(self.host.addr);
-
+        let node = self.node.clone();
         let max_transmits = meta.len();
         assert!(meta.len() <= bufs.len());
 
         let mut lock = self.next_packet_delivery.lock();
         let delivery = lock.get_or_insert(Box::pin(NextPacketDelivery::new(
-            host.inbound.clone(),
+            self.endpoint.inbound.clone(),
             max_transmits,
         )));
         let delivered = ready!(delivery.as_mut().poll(cx));
@@ -80,12 +80,12 @@ impl AsyncUdpSocket for InMemoryUdpSocket {
         for (in_transit, (meta, buf)) in delivered.into_iter().zip(out) {
             self.network
                 .tracer
-                .track_read_by_host(host.id.clone(), &in_transit.data);
+                .track_read_by_host(node.id.clone(), &in_transit.data);
 
             let transmit = in_transit.data.transmit;
 
             // Meta
-            meta.addr = in_transit.data.source.addr;
+            meta.addr = in_transit.data.source_endpoint.addr;
             meta.ecn = transmit.ecn;
             meta.dst_ip = Some(transmit.destination.ip());
             meta.len = transmit.contents.len();
@@ -99,6 +99,6 @@ impl AsyncUdpSocket for InMemoryUdpSocket {
     }
 
     fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        Ok(self.host.addr)
+        Ok(self.endpoint.addr)
     }
 }

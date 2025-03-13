@@ -80,8 +80,10 @@ impl Simulation {
             println!("  * {}: {}", link_spec.id, status);
         }
         println!("* Running connectivity check...");
+        let server_node = network.host(options.server_ip_address);
+        let client_node = network.host(options.client_ip_address);
         let (arrived1, arrived2) = network
-            .assert_connectivity_between_hosts(options.server_ip_address, options.client_ip_address)
+            .assert_connectivity_between_hosts(server_node, client_node)
             .await?;
         println!(
             "* Connectivity check passed (packets arrived after {} ms and {} ms)",
@@ -115,11 +117,11 @@ impl Simulation {
         // Let a server listen in the background
         let mut quinn_rng = Rng::with_seed(quinn_rng_seed);
         let server_host = network.host(options.server_ip_address);
-        let server_addr = server_host.addr;
+        let server_addr = server_host.quic_addr();
         let server = server::server_endpoint(
             cert.clone(),
             key.into(),
-            network.udp_socket_for_host(server_host.clone()),
+            network.udp_socket_for_node(server_host.clone()),
             &config.quinn,
             &mut quinn_rng,
         )?;
@@ -130,7 +132,7 @@ impl Simulation {
         let client_host = network.host(options.client_ip_address);
         let client = client::client_endpoint(
             cert,
-            network.udp_socket_for_host(client_host.clone()),
+            network.udp_socket_for_node(client_host.clone()),
             &config.quinn,
             &mut quinn_rng,
         )?;

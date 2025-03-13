@@ -1,70 +1,22 @@
 use crate::HOST_PORT;
-use crate::network::InMemoryNetwork;
 use crate::network::inbound_queue::InboundQueue;
 use crate::network::outbound_buffer::OutboundBuffer;
 use crate::network::spec::{NetworkNodeSpec, NodeKind};
 use anyhow::bail;
 use parking_lot::Mutex;
-use std::fmt::{Debug, Formatter};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 #[derive(Clone)]
-pub enum Node {
-    Host(Host),
-    Router(Arc<Router>),
+pub struct Node {
+    pub(crate) addresses: Vec<IpAddr>,
+    pub(crate) id: Arc<str>,
+    pub(crate) outbound_buffer: Arc<OutboundBuffer>,
+    pub(crate) quinn_endpoint: Option<Arc<QuinnEndpoint>>,
 }
 
 impl Node {
-    pub fn id(&self) -> &Arc<str> {
-        match self {
-            Node::Host(h) => &h.id,
-            Node::Router(r) => &r.id,
-        }
-    }
-
-    pub fn addresses(&self) -> impl Iterator<Item = IpAddr> + use<> {
-        match self {
-            Node::Host(host) => vec![host.addr.ip()].into_iter(),
-            Node::Router(router) => router.addresses.clone().into_iter(),
-        }
-    }
-
-    pub fn outbound_buffer(&self) -> Arc<OutboundBuffer> {
-        match self {
-            Node::Host(host) => host.outbound.clone(),
-            Node::Router(router) => router.outbound_buffer.clone(),
-        }
-    }
-}
-
-pub struct HostHandle {
-    pub network: Arc<InMemoryNetwork>,
-    pub(crate) host: Host,
-}
-
-impl HostHandle {
-    pub fn addr(&self) -> SocketAddr {
-        self.host.addr
-    }
-}
-
-impl Debug for HostHandle {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "host ({})", self.addr())
-    }
-}
-
-#[derive(Clone)]
-pub struct Host {
-    pub id: Arc<str>,
-    pub addr: SocketAddr,
-    pub(crate) inbound: Arc<Mutex<InboundQueue>>,
-    outbound: Arc<OutboundBuffer>,
-}
-
-impl Host {
-    pub(crate) fn from_network_node(node: NetworkNodeSpec) -> anyhow::Result<Self> {
+    pub(crate) fn host(node: NetworkNodeSpec) -> anyhow::Result<(Self, Arc<QuinnEndpoint>)> {
         if node.kind != NodeKind::Host {
             bail!(
                 "Attempted to create a host from a node that is not a host: {}",
@@ -77,18 +29,55 @@ impl Host {
         if node.interfaces[0].addresses.is_empty() {
             bail!("Host {} has an interface without any address", node.id);
         }
-        let node_address = node.interfaces[0].addresses[0].as_ip_addr();
-        Ok(Self {
-            addr: SocketAddr::new(node_address, HOST_PORT),
-            id: node.id.into(),
+
+        let addresses = node.addresses();
+        let quic_address = addresses[0];
+        let quinn_endpoint = Arc::new(QuinnEndpoint {
+            addr: SocketAddr::new(quic_address, HOST_PORT),
             inbound: Arc::new(Mutex::new(InboundQueue::new())),
-            outbound: Arc::new(OutboundBuffer::new(node.buffer_size_bytes as usize)),
+        });
+        let host = Self {
+            id: node.id.into(),
+            addresses,
+            outbound_buffer: Arc::new(OutboundBuffer::new(node.buffer_size_bytes as usize)),
+            quinn_endpoint: Some(quinn_endpoint.clone()),
+        };
+        Ok((host, quinn_endpoint))
+    }
+
+    pub(crate) fn router(node: NetworkNodeSpec) -> anyhow::Result<Self> {
+        let addresses = node.addresses();
+        if addresses.is_empty() {
+            bail!("found router with no addresses: {}", node.id);
+        }
+
+        Ok(Node {
+            id: node.id.into(),
+            addresses,
+            outbound_buffer: Arc::new(OutboundBuffer::new(node.buffer_size_bytes as usize)),
+            quinn_endpoint: None,
         })
+    }
+
+    pub fn quic_addr(&self) -> SocketAddr {
+        self.quinn_endpoint.as_ref().unwrap().addr
+    }
+
+    pub fn id(&self) -> &Arc<str> {
+        &self.id
+    }
+
+    pub fn addresses(&self) -> impl Iterator<Item = IpAddr> + use<> {
+        self.addresses.clone().into_iter()
+    }
+
+    pub fn outbound_buffer(&self) -> Arc<OutboundBuffer> {
+        self.outbound_buffer.clone()
     }
 }
 
-pub struct Router {
-    pub(crate) addresses: Vec<IpAddr>,
-    pub(crate) id: Arc<str>,
-    pub(crate) outbound_buffer: Arc<OutboundBuffer>,
+#[derive(Clone)]
+pub struct QuinnEndpoint {
+    pub inbound: Arc<Mutex<InboundQueue>>,
+    pub addr: SocketAddr,
 }
