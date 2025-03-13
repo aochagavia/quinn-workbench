@@ -112,6 +112,7 @@ struct InvalidOutput {
 }
 
 fn run_quinn_workbench(test_case: TestCase) -> Result<(), TestError> {
+    println!("Running `{}`...", test_case.name);
     let workbench_args = test_case.args.split_whitespace();
     let command = Command::new("./target/release/quinn-workbench")
         .args(workbench_args)
@@ -129,10 +130,12 @@ fn run_quinn_workbench(test_case: TestCase) -> Result<(), TestError> {
     match test_case.expected_stdout {
         Some(expected_stdout) => {
             if expected_stdout != stdout {
+                println!("... calculating stdout diff");
                 stdout_diff = Some(diff::diff_to_string(&expected_stdout, &stdout));
             }
         }
         None => {
+            println!("... expected stdout not found, persisting the current one for future tests");
             std::fs::write(test_case.dir.join(EXPECTED_STDOUT_FILE), stdout.as_bytes())
                 .context("failed to persist stdout")
                 .map_err(TestError::Internal)?;
@@ -143,10 +146,12 @@ fn run_quinn_workbench(test_case: TestCase) -> Result<(), TestError> {
     match test_case.expected_replay_log {
         Some(expected_replay_log) => {
             if expected_replay_log != replay_log {
+                println!("... calculating replay log diff");
                 replay_log_diff = Some(diff::diff_to_string(&expected_replay_log, &replay_log));
             }
         }
         None => {
+            println!("... expected replay log not found, persisting the current one for future tests");
             std::fs::write(
                 test_case.dir.join(EXPECTED_REPLAY_LOG_FILE),
                 replay_log.as_bytes(),

@@ -94,15 +94,19 @@ impl InMemoryNetwork {
         }
 
         let mut nodes_by_addr = HashMap::new();
+        let mut nodes_and_outbound_rx = Vec::new();
         for host in hosts {
-            let (h, endpoint) = Node::host(host)?;
-            let already_existing = nodes_by_addr.insert(endpoint.addr.ip(), Arc::new(h));
+            let (h, endpoint, outbound_rx) = Node::host(host)?;
+            let h = Arc::new(h);
+            let already_existing = nodes_by_addr.insert(endpoint.addr.ip(), h.clone());
             if already_existing.is_some() {
                 bail!(
                     "Expected quic endpoints to have unique ip addresses, but at least two endpoints are using {}",
                     endpoint.addr.ip()
                 );
             }
+
+            nodes_and_outbound_rx.push((h, outbound_rx));
         }
 
         let mut links_by_addr = HashMap::new();
@@ -131,7 +135,8 @@ impl InMemoryNetwork {
         }
 
         for r in routers {
-            let router = Arc::new(Node::router(r)?);
+            let (router, outbound_rx) = Node::router(r)?;
+            let router = Arc::new(router);
 
             let mut inbound_links = HashMap::new();
             for (&(source, target), link) in &links_by_addr {
@@ -151,6 +156,8 @@ impl InMemoryNetwork {
                     );
                 }
             }
+
+            nodes_and_outbound_rx.push((router, outbound_rx));
         }
 
         let network = Arc::new(Self {
@@ -162,6 +169,9 @@ impl InMemoryNetwork {
             rng: Mutex::new(rng),
             next_transmit_number: Default::default(),
         });
+
+        // Process node buffers in the background
+        spawn_node_buffer_processors(network.clone(), nodes_and_outbound_rx);
 
         // Forward packets in the background
         spawn_packet_forwarders(network.clone());
@@ -408,7 +418,7 @@ impl InMemoryNetwork {
     pub(crate) fn forward(
         self: &Arc<InMemoryNetwork>,
         current_node: Arc<Node>,
-        mut data: InTransitData,
+        data: InTransitData,
     ) {
         self.tracer.track_packet_in_node(&current_node, &data);
 
@@ -421,12 +431,38 @@ impl InMemoryNetwork {
                     .clone()
                     .lock()
                     .send(data, Duration::default());
+
                 return;
             }
         }
 
-        let Some(link) = self.resolve_link(&current_node, &data) else {
-            let nodes = self.tracer.stepper().get_packet_path(data.id);
+        // The packet needs to be transmitted to the next hop. We store it in the node's
+        // outbound buffer, and it will automatically be picked up by a background task
+        current_node.enqueue_outbound(data);
+    }
+}
+
+fn spawn_node_buffer_processors(
+    network: Arc<InMemoryNetwork>,
+    nodes: Vec<(
+        Arc<Node>,
+        tokio::sync::mpsc::UnboundedReceiver<InTransitData>,
+    )>,
+) {
+    for (node, outbound_rx) in nodes {
+        let network = network.clone();
+        tokio::spawn(async move { process_buffer_for_node(network, node, outbound_rx).await });
+    }
+}
+
+async fn process_buffer_for_node(
+    network: Arc<InMemoryNetwork>,
+    node: Arc<Node>,
+    mut outbound_rx: tokio::sync::mpsc::UnboundedReceiver<InTransitData>,
+) {
+    while let Some(mut data) = outbound_rx.recv().await {
+        let Some(link) = network.resolve_link(&node, &data) else {
+            let nodes = network.tracer.stepper().get_packet_path(data.id);
             let mut path = nodes.join(" -> ");
             path.push_str(" -> ?");
 
@@ -445,23 +481,23 @@ impl InMemoryNetwork {
         // Concurrency: limit the lock guard's lifetime
         {
             let link = link.lock();
-            let roll1 = self.rng.lock().f64();
+            let roll1 = network.rng.lock().f64();
             if roll1 < link.packet_loss_ratio {
                 randomly_dropped = true;
             } else if roll1 < link.packet_loss_ratio + link.packet_duplication_ratio {
                 duplicate = true;
             }
 
-            let roll2 = self.rng.lock().f64();
+            let roll2 = network.rng.lock().f64();
             if roll2 < link.extra_delay_ratio {
                 extra_delay = link.extra_delay;
             }
 
-            congestion_experienced = self.rng.lock().f64() < link.congestion_event_ratio;
+            congestion_experienced = network.rng.lock().f64() < link.congestion_event_ratio;
         }
 
         if randomly_dropped {
-            self.tracer.track_dropped_randomly(&data, &current_node);
+            network.tracer.track_dropped_randomly(&data, &node);
             return;
         }
 
@@ -479,7 +515,7 @@ impl InMemoryNetwork {
 
         let maybe_duplicate = duplicate.then(|| {
             let mut duplicate_data = data.clone();
-            duplicate_data.id = self.new_packet_id();
+            duplicate_data.id = network.new_packet_id();
             duplicate_data.duplicate = true;
             duplicate_data
         });
@@ -488,27 +524,27 @@ impl InMemoryNetwork {
         packets.extend(maybe_duplicate);
 
         for packet in packets.into_iter() {
-            self.tracer.track_injected_failures(
+            network.tracer.track_injected_failures(
                 &packet,
                 duplicate && packet.duplicate,
                 extra_delay,
                 congestion_experienced,
-                &current_node,
+                &node,
             );
 
             let link_is_available = link.lock().has_bandwidth_available(&packet);
             if link_is_available {
-                link.lock().send(&current_node, packet, extra_delay);
+                link.lock().send(&node, packet, extra_delay);
             } else {
                 // Try to enqueue the data on the node's outbound buffer for later sending
-                let outbound_buffer = current_node.outbound_buffer();
+                let outbound_buffer = node.outbound_buffer();
                 let data_len = packet.transmit.contents.len();
 
                 if outbound_buffer.reserve(data_len) {
                     // The buffer has capacity!
                     let sent = NetworkLink::send_when_bandwidth_available(
                         link.clone(),
-                        current_node.clone(),
+                        node.clone(),
                         packet,
                         extra_delay,
                     );
@@ -528,8 +564,9 @@ impl InMemoryNetwork {
                 } else {
                     // The buffer is full and the packet is being dropped
                     let link = link.lock();
-                    self.tracer
-                        .track_dropped_from_buffer(&packet, &current_node, &link);
+                    network
+                        .tracer
+                        .track_dropped_from_buffer(&packet, &node, &link);
                 }
             }
         }
