@@ -4,6 +4,7 @@ use crate::network::inbound_queue::{InboundQueue, NextPacketDelivery};
 use crate::network::node::Node;
 use crate::network::spec::NetworkLinkSpec;
 use crate::tracing::tracer::SimulationStepTracer;
+use crate::transmit::{IPV4_OVERHEAD, UDP_OVERHEAD};
 use futures_util::FutureExt;
 use futures_util::future::Shared;
 use parking_lot::Mutex;
@@ -124,7 +125,7 @@ impl NetworkLink {
         // Sanity checks
         assert!(
             self.rate_calculator
-                .has_bandwidth_available(Instant::now(), data.transmit.contents.len())
+                .has_bandwidth_available(Instant::now(), data.transmit.packet_size())
         );
         assert!(matches!(self.status, LinkStatus::Up));
 
@@ -134,8 +135,7 @@ impl NetworkLink {
             .track_packet_in_transit(current_node, self, &data);
 
         // Send
-        self.rate_calculator
-            .track_send(data.transmit.contents.len());
+        self.rate_calculator.track_send(data.transmit.packet_size());
         self.in_transit.lock().send(data, self.delay + extra_delay);
     }
 
@@ -152,7 +152,7 @@ impl NetworkLink {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let existing_task = this.lock().packets_waiting_for_bandwidth_task.take();
         let this_cp = this.clone();
-        let data_len = data.transmit.contents.len();
+        let data_len = data.transmit.packet_size();
         let new_task = tokio::spawn(async move {
             if let Some(task) = existing_task {
                 // Wait for the previous packets in the queue to be done
@@ -196,7 +196,7 @@ impl NetworkLink {
         }
 
         self.rate_calculator
-            .has_bandwidth_available(Instant::now(), data.transmit.contents.len())
+            .has_bandwidth_available(Instant::now(), data.transmit.packet_size())
     }
 
     pub(crate) fn next_delivered_packets(&mut self, max_transmits: usize) -> NextPacketDelivery {
@@ -216,7 +216,10 @@ impl DataRateCalculator {
     fn new(bandwidth_bps: u64) -> Self {
         // We use 100ms as the maximum period in which you can "accumulate" bandwidth, unless the
         // link's bandwidth is so small that more time is necessary to reach the QUIC MTU
-        let max_available_bandwidth_bits = cmp::max((bandwidth_bps / 10) as usize, 1200 * 8);
+        let max_available_bandwidth_bits = cmp::max(
+            (bandwidth_bps / 10) as usize,
+            1200 * 8 + (UDP_OVERHEAD + IPV4_OVERHEAD) * 8,
+        );
 
         Self {
             last_increase: Instant::now(),

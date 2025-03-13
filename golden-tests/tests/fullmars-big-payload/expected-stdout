@@ -40,27 +40,27 @@
 0.00s CONNECT (conn = A)
 1802.40s CONNECTED (conn = A)
 1802.40s GET /index.html (stream = A1)
-3731505.74s DONE (conn = A, request/response amount = 1)
-3731505.74s All connections closed
+3731498.75s DONE (conn = A, request/response amount = 1)
+3731498.75s All connections closed
 --- Replay log ---
 * Replay log available at replay-log.json
 --- Node stats ---
 * GND (client)
-  * Sent packets: 1028 (42801 bytes)
+  * Sent packets: 1028 (71585 bytes)
     | 0 packets duplicated in transit (0 bytes)
     | 0 packets marked with the CE ECN codepoint in transit (0 bytes)
     | 0 packets dropped in transit (0 bytes)
-  * Received packets: 9072 (10880881 bytes)
-    | 226 packets received out of order (271200 bytes)
+  * Received packets: 9072 (11134897 bytes)
+    | 226 packets received out of order (277528 bytes)
 * ING (server)
-  * Sent packets: 9516 (11412523 bytes)
+  * Sent packets: 9516 (11678971 bytes)
     | 0 packets duplicated in transit (0 bytes)
     | 0 packets marked with the CE ECN codepoint in transit (0 bytes)
     | 0 packets dropped in transit (0 bytes)
-  * Received packets: 964 (40287 bytes)
-    | 87 packets received out of order (3443 bytes)
+  * Received packets: 964 (67279 bytes)
+    | 87 packets received out of order (5879 bytes)
 --- Max buffer usage per node ---
-* MRO: 14400 bytes (0 packets dropped due to buffer being full)
+* MRO: 14736 bytes (0 packets dropped due to buffer being full)
 * DSN: 0 bytes (0 packets dropped due to buffer being full)
 * GND: 0 bytes (0 packets dropped due to buffer being full)
 * ING: 0 bytes (0 packets dropped due to buffer being full)
@@ -70,5 +70,5 @@
 * ODY: 0 bytes (0 packets dropped due to buffer being full)
 * TGO: 0 bytes (0 packets dropped due to buffer being full)
 --- Link stats ---
-* DSN-MRO: 60 packets lost in transit (2358 bytes)
-* MRO-DSN: 78 packets lost in transit (93600 bytes)
+* DSN-MRO: 60 packets lost in transit (4038 bytes)
+* MRO-DSN: 78 packets lost in transit (95784 bytes)

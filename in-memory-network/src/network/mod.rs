@@ -11,13 +11,14 @@ mod outbound_buffer;
 pub mod route;
 pub mod spec;
 
+use crate::InTransitData;
 use crate::network::event::{NetworkEventPayload, NetworkEvents};
 use crate::network::inbound_queue::InboundQueue;
 use crate::network::node::Node;
 use crate::network::spec::{NetworkSpec, NodeKind};
 use crate::quinn_interop::InMemoryUdpSocket;
 use crate::tracing::tracer::SimulationStepTracer;
-use crate::{InTransitData, OwnedTransmit};
+use crate::transmit::OwnedTransmit;
 use anyhow::{anyhow, bail};
 use fastrand::Rng;
 use link::NetworkLink;
@@ -526,7 +527,7 @@ async fn process_buffer_for_node(
             }
         };
 
-        node.outbound_buffer().release(data.transmit.contents.len());
+        node.outbound_buffer().release(data.transmit.packet_size());
         let congestion_experienced;
         let mut extra_delay = Duration::from_secs(0);
 

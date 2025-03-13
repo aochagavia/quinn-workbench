@@ -4,28 +4,14 @@ pub mod network;
 pub mod pcap_exporter;
 pub mod quinn_interop;
 pub mod tracing;
+mod transmit;
 mod util;
 
 use crate::network::node::QuinnEndpoint;
-use quinn::udp::EcnCodepoint;
-use std::fmt::Debug;
-use std::net::SocketAddr;
 use std::sync::Arc;
+use transmit::OwnedTransmit;
 
 const HOST_PORT: u16 = 8080;
-
-#[derive(Clone, Debug)]
-struct OwnedTransmit {
-    /// The socket this datagram should be sent to
-    pub destination: SocketAddr,
-    /// Explicit congestion notification bits to set on the packet
-    pub ecn: Option<EcnCodepoint>,
-    /// Contents of the datagram
-    pub contents: Vec<u8>,
-    /// The segment size if this transmission contains multiple datagrams.
-    /// This is `None` if the transmit only contains a single datagram
-    pub segment_size: Option<usize>,
-}
 
 #[derive(Clone)]
 pub struct InTransitData {
@@ -396,7 +382,7 @@ mod test {
     async fn test_packet_is_delayed_by_buffering() {
         let bandwidths_and_delays = [
             (BANDWIDTH_100_MBPS, Duration::from_millis(0)),
-            (BANDWIDTH_8_KBPS, Duration::from_secs_f64(1.2)),
+            (BANDWIDTH_8_KBPS, Duration::from_secs_f64(1.228)),
         ];
         for (bandwidth, expected_delay) in bandwidths_and_delays {
             // Sanity check

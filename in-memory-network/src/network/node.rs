@@ -108,7 +108,7 @@ impl Node {
     pub(crate) fn enqueue_outbound(&self, network: &Arc<InMemoryNetwork>, data: InTransitData) {
         // Try to enqueue the data on the node's outbound buffer for later sending
         let outbound_buffer = self.outbound_buffer();
-        let data_len = data.transmit.contents.len();
+        let data_len = data.transmit.packet_size();
 
         if outbound_buffer.reserve(data_len) {
             // The buffer has capacity!

@@ -1,7 +1,7 @@
-use crate::OwnedTransmit;
 use crate::network::InMemoryNetwork;
 use crate::network::inbound_queue::NextPacketDelivery;
 use crate::network::node::{Node, QuinnEndpoint};
+use crate::transmit::OwnedTransmit;
 use parking_lot::Mutex;
 use quinn::udp::{RecvMeta, Transmit};
 use quinn::{AsyncUdpSocket, UdpPoller};

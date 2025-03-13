@@ -63,7 +63,7 @@ impl SimulationStepTracer {
         self.record(SimulationStepKind::PacketInNode(GenericPacketEvent {
             packet_id: packet.id,
             packet_number: packet.number,
-            packet_size_bytes: packet.transmit.contents.len(),
+            packet_size_bytes: packet.transmit.packet_size(),
             node_id: node.id().clone(),
         }));
     }
@@ -141,7 +141,7 @@ impl SimulationStepTracer {
             self.record(SimulationStepKind::PacketDuplicated(GenericPacketEvent {
                 packet_id: data.id,
                 packet_number: data.number,
-                packet_size_bytes: data.transmit.contents.len(),
+                packet_size_bytes: data.transmit.packet_size(),
                 node_id: current_node.id().clone(),
             }));
 
@@ -158,7 +158,7 @@ impl SimulationStepTracer {
                 GenericPacketEvent {
                     packet_id: data.id,
                     packet_number: data.number,
-                    packet_size_bytes: data.transmit.contents.len(),
+                    packet_size_bytes: data.transmit.packet_size(),
                     node_id: current_node.id().clone(),
                 },
             ));
@@ -177,7 +177,7 @@ impl SimulationStepTracer {
             GenericPacketEvent {
                 packet_id: data.id,
                 packet_number: data.number,
-                packet_size_bytes: data.transmit.contents.len(),
+                packet_size_bytes: data.transmit.packet_size(),
                 node_id: host_id.clone(),
             },
         ));
