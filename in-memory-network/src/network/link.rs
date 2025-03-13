@@ -83,7 +83,7 @@ impl NetworkLink {
     }
 
     pub fn was_down_after(&self, instant: Instant) -> bool {
-        matches!(self.last_down, Some(down) if down >= instant)
+        matches!(self.last_down, Some(down) if down > instant)
     }
 
     pub(crate) fn status_str(&self) -> &'static str {
