@@ -184,7 +184,7 @@ impl SimulationStepTracer {
     }
 
     pub fn track_sent_in_pcap(&self, data: &InTransitData, current_node: &Node) {
-        if let Some(endpoint) = &current_node.quinn_endpoint {
+        if let Some(endpoint) = &current_node.udp_endpoint {
             self.pcap_exporter
                 .track_packet(data, &endpoint.addr, data.transmit.ecn);
         };

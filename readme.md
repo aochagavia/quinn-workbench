@@ -28,22 +28,24 @@ After [installing Rust](https://rustup.rs/), you can get started with:
 
 ```bash
 cargo run --release --bin quinn-workbench -- \
-  --quinn-config test-data/earth-mars/quinn.json \
   --network-graph test-data/earth-mars/networkgraph-fullmars.json \
   --network-events test-data/earth-mars/events.json \
   --client-ip-address 192.168.40.1 \
-  --server-ip-address 192.168.43.2
+  --server-ip-address 192.168.43.2 \
+  quic \
+  --quinn-config test-data/earth-mars/quinn.json
 ```
 
 Here's an example issuing a single request and receiving a 10 MiB response:
 
 ```bash
 cargo run --release --bin quinn-workbench -- \
-  --quinn-config test-data/earth-mars/quinn.json \
   --network-graph test-data/earth-mars/networkgraph-fullmars.json \
   --network-events test-data/earth-mars/events.json \
   --client-ip-address 192.168.40.1 \
   --server-ip-address 192.168.43.2 \
+  quic \
+  --quinn-config test-data/earth-mars/quinn.json \
   --requests 1 --response-size 10485760
 ```
 
@@ -51,24 +53,27 @@ Here's an example controlling the random seeds (which otherwise use a hardcoded 
 
 ```bash
 cargo run --release --bin quinn-workbench -- \
-  --quinn-config test-data/earth-mars/quinn.json \
   --network-graph test-data/earth-mars/networkgraph-fullmars.json \
   --network-events test-data/earth-mars/events.json \
   --client-ip-address 192.168.40.1 \
   --server-ip-address 192.168.43.2 \
-  --quinn-rng-seed 1234 --simulated-network-rng-seed 1337
+  --network-rng-seed 1337 \
+  quic \
+  --quinn-config test-data/earth-mars/quinn.json \
+  --quinn-rng-seed 1234
 ```
 
 Here's an example using random seeds derived from a source of entropy:
 
 ```bash
 cargo run --release --bin quinn-workbench -- \
-  --quinn-config test-data/earth-mars/quinn.json \
   --network-graph test-data/earth-mars/networkgraph-fullmars.json \
   --network-events test-data/earth-mars/events.json \
   --client-ip-address 192.168.40.1 \
   --server-ip-address 192.168.43.2 \
-  --non-deterministic
+  --non-deterministic \
+  quic \
+  --quinn-config test-data/earth-mars/quinn.json
 ```
 
 ## JSON config details
@@ -149,56 +154,8 @@ as you can see in [events.json](test-data/earth-mars/events.json).
 
 ## Command line arguments
 
-While the JSON configuration controls the QUIC and network parameters, the following command line
-flags control other aspects of the simulation:
-
-```
---client-ip-address <CLIENT_IP_ADDRESS>
-    The IP address of the node used as a client
-
---server-ip-address <SERVER_IP_ADDRESS>
-    The IP address of the node used as a server
-
---requests <REQUESTS>
-    The number of requests that should be made
-
-    [default: 10]
-
---concurrent-connections <CONCURRENT_CONNECTIONS>
-    The number of concurrent connections used when making the requests
-
-    [default: 1]
-
---concurrent-streams-per-connection <CONCURRENT_STREAMS_PER_CONNECTION>
-    The number of concurrent streams per connection used when making the requests
-
-    [default: 1]
-
---response-size <RESPONSE_SIZE>
-    The size of each response, in bytes
-
-    [default: 1024]
-
---non-deterministic
-    Whether the run should be non-deterministic, i.e. using a non-constant seed for the random number generators
-
---quinn-rng-seed <QUINN_RNG_SEED>
-    Quinn's random seed, which you can control to generate deterministic results (Quinn uses randomness internally)
-
-    [default: 0]
-
---simulated-network-rng-seed <SIMULATED_NETWORK_RNG_SEED>
-    The random seed used for the simulated network (governing packet loss, duplication and reordering)
-
-    [default: 42]
-
---network-graph <NETWORK_GRAPH_JSON_FILE>
-    Creates a network based on the topology described in the JSON file
-
---network-events <NETWORK_EVENTS_JSON_FILE>
-    Apply various timed events, such as link up and down, to the network
-
-```
+The tool is self-documenting, so running it with `--help` will show up-to-date information about
+command line arguments.
 
 ## Validation
 

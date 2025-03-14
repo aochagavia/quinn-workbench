@@ -57,8 +57,6 @@ impl Future for NextPacketDelivery {
     type Output = Vec<DeliveredTransmit>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let now = Instant::now();
-
         let mut delivered = Vec::new();
         loop {
             if delivered.len() >= self.max_transmits {
@@ -66,6 +64,12 @@ impl Future for NextPacketDelivery {
             }
 
             if let Some(sleep) = &mut self.sleep {
+                // Instead of sleeping, we return the number of delivered packets we have found so
+                // the reader can make progress
+                if !delivered.is_empty() {
+                    break;
+                }
+
                 ready!(sleep.as_mut().poll(cx));
 
                 // Sleep has elapsed, so let's get rid of it
@@ -83,7 +87,7 @@ impl Future for NextPacketDelivery {
                 break;
             };
 
-            if next_arrival_time > now {
+            if next_arrival_time > Instant::now() {
                 // Sleep in the next iteration until we are allowed to deliver the next packet
                 self.sleep = Some(Box::pin(tokio::time::sleep_until(next_arrival_time)));
             } else {

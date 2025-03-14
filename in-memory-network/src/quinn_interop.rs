@@ -1,6 +1,6 @@
 use crate::network::InMemoryNetwork;
 use crate::network::inbound_queue::NextPacketDelivery;
-use crate::network::node::{Node, QuinnEndpoint};
+use crate::network::node::{Node, UdpEndpoint};
 use crate::transmit::OwnedTransmit;
 use parking_lot::Mutex;
 use quinn::udp::{RecvMeta, Transmit};
@@ -23,7 +23,7 @@ impl UdpPoller for InMemoryUdpPoller {
 
 pub struct InMemoryUdpSocket {
     pub network: Arc<InMemoryNetwork>,
-    pub endpoint: Arc<QuinnEndpoint>,
+    pub endpoint: Arc<UdpEndpoint>,
     pub node: Arc<Node>,
     pub next_packet_delivery: Mutex<Option<Pin<Box<NextPacketDelivery>>>>,
 }

@@ -278,7 +278,7 @@ impl InMemoryNetwork {
     /// Note: creating multiple sockets for a single node results in unspecified behavior
     pub fn udp_socket_for_node(self: &Arc<InMemoryNetwork>, node: Arc<Node>) -> InMemoryUdpSocket {
         InMemoryUdpSocket {
-            endpoint: node.quinn_endpoint.as_ref().unwrap().clone(),
+            endpoint: node.udp_endpoint.as_ref().unwrap().clone(),
             node,
             network: self.clone(),
             next_packet_delivery: Mutex::new(None),
@@ -288,7 +288,7 @@ impl InMemoryNetwork {
     /// Returns the host bound to the provided address
     pub fn host(self: &InMemoryNetwork, ip: IpAddr) -> &Arc<Node> {
         let node = &self.nodes_by_addr[&ip];
-        assert!(node.quinn_endpoint.is_some(), "not a host");
+        assert!(node.udp_endpoint.is_some(), "not a host");
         node
     }
 
@@ -304,7 +304,7 @@ impl InMemoryNetwork {
             let data = self.in_transit_data(
                 source,
                 OwnedTransmit {
-                    destination: target.quinn_endpoint.as_ref().unwrap().addr,
+                    destination: target.udp_endpoint.as_ref().unwrap().addr,
                     ecn: None,
                     contents: vec![42],
                     segment_size: None,
@@ -321,12 +321,12 @@ impl InMemoryNetwork {
         // Ensure the packets arrived at each host
         let a_to_b = tokio::time::timeout(
             timeout,
-            InboundQueue::receive(host_b.quinn_endpoint.as_ref().unwrap().inbound.clone(), 1),
+            InboundQueue::receive(host_b.udp_endpoint.as_ref().unwrap().inbound.clone(), 1),
         )
         .await;
         let b_to_a = tokio::time::timeout(
             timeout,
-            InboundQueue::receive(host_a.quinn_endpoint.as_ref().unwrap().inbound.clone(), 1),
+            InboundQueue::receive(host_a.udp_endpoint.as_ref().unwrap().inbound.clone(), 1),
         )
         .await;
 
@@ -413,7 +413,7 @@ impl InMemoryNetwork {
             id: self.new_packet_id(),
             duplicate: false,
             source_id: source.id.clone(),
-            source_endpoint: source.quinn_endpoint.as_ref().unwrap().clone(),
+            source_endpoint: source.udp_endpoint.as_ref().unwrap().clone(),
             transmit,
             number: self.next_transmit_number.fetch_add(1, Ordering::Relaxed),
         }
@@ -431,11 +431,11 @@ impl InMemoryNetwork {
     ) {
         self.tracer.track_packet_in_node(&current_node, &data);
 
-        if let Some(quinn_endpoint) = &current_node.quinn_endpoint {
-            if quinn_endpoint.addr == data.transmit.destination {
+        if let Some(udp_endpoint) = &current_node.udp_endpoint {
+            if udp_endpoint.addr == data.transmit.destination {
                 // The packet has arrived to a quinn endpoint, so we forward it directly to the nodes's
                 // inbound queue (from where it will be automatically picked up by quinn)
-                quinn_endpoint
+                udp_endpoint
                     .inbound
                     .clone()
                     .lock()

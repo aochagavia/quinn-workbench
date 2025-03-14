@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 pub struct Node {
     pub(crate) addresses: Vec<IpAddr>,
     pub(crate) id: Arc<str>,
-    pub(crate) quinn_endpoint: Option<Arc<QuinnEndpoint>>,
+    pub(crate) udp_endpoint: Option<Arc<UdpEndpoint>>,
     pub(crate) injected_failures: NodeInjectedFailures,
     outbound_buffer: Arc<OutboundBuffer>,
     outbound_tx: tokio::sync::mpsc::UnboundedSender<InTransitData>,
@@ -25,7 +25,7 @@ impl Node {
         node: NetworkNodeSpec,
     ) -> anyhow::Result<(
         Self,
-        Arc<QuinnEndpoint>,
+        Arc<UdpEndpoint>,
         tokio::sync::mpsc::UnboundedReceiver<InTransitData>,
     )> {
         if node.kind != NodeKind::Host {
@@ -43,7 +43,7 @@ impl Node {
 
         let addresses = node.addresses();
         let quic_address = addresses[0];
-        let quinn_endpoint = Arc::new(QuinnEndpoint {
+        let quinn_endpoint = Arc::new(UdpEndpoint {
             addr: SocketAddr::new(quic_address, HOST_PORT),
             inbound: Arc::new(Mutex::new(InboundQueue::new())),
         });
@@ -54,7 +54,7 @@ impl Node {
             id: node.id.into(),
             addresses,
             outbound_buffer: Arc::new(OutboundBuffer::new(node.buffer_size_bytes as usize)),
-            quinn_endpoint: Some(quinn_endpoint.clone()),
+            udp_endpoint: Some(quinn_endpoint.clone()),
             outbound_tx: tx,
         };
         Ok((host, quinn_endpoint, rx))
@@ -74,7 +74,7 @@ impl Node {
             id: node.id.into(),
             addresses,
             outbound_buffer: Arc::new(OutboundBuffer::new(node.buffer_size_bytes as usize)),
-            quinn_endpoint: None,
+            udp_endpoint: None,
             outbound_tx: tx,
         };
 
@@ -120,7 +120,7 @@ impl Node {
     }
 
     pub fn quic_addr(&self) -> SocketAddr {
-        self.quinn_endpoint.as_ref().unwrap().addr
+        self.udp_endpoint.as_ref().unwrap().addr
     }
 
     pub fn id(&self) -> &Arc<str> {
@@ -151,7 +151,7 @@ impl NodeInjectedFailures {
 }
 
 #[derive(Clone)]
-pub struct QuinnEndpoint {
+pub struct UdpEndpoint {
     pub inbound: Arc<Mutex<InboundQueue>>,
     pub addr: SocketAddr,
 }

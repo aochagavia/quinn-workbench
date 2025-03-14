@@ -7,7 +7,7 @@ pub mod tracing;
 mod transmit;
 mod util;
 
-use crate::network::node::QuinnEndpoint;
+use crate::network::node::UdpEndpoint;
 use std::sync::Arc;
 use transmit::OwnedTransmit;
 
@@ -17,7 +17,7 @@ const HOST_PORT: u16 = 8080;
 pub struct InTransitData {
     id: uuid::Uuid,
     duplicate: bool,
-    source_endpoint: Arc<QuinnEndpoint>,
+    source_endpoint: Arc<UdpEndpoint>,
     source_id: Arc<str>,
     transmit: OwnedTransmit,
     number: u64,
