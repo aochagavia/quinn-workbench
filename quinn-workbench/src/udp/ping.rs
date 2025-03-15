@@ -106,7 +106,6 @@ pub async fn run(
         loop {
             // Send ping
             let payload = ping_nr.to_le_bytes();
-            ping_nr += 1;
 
             client_socket_cp
                 .try_send(&Transmit {
@@ -119,6 +118,7 @@ pub async fn run(
                 .unwrap();
 
             in_flight_cp.lock().insert(ping_nr, Instant::now());
+            ping_nr += 1;
 
             // Track pings as lost after the deadline has passed
             let in_flight_cp = in_flight_cp.clone();
