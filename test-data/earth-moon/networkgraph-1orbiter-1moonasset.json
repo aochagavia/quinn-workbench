@@ -1,0 +1,119 @@
+{
+    "type": "NetworkGraph",
+    "nodes": [
+        {
+            "id": "Earth1",
+            "type": "host",
+            "bufferSizeBytes": 1000000000,
+            "interfaces": [
+                {
+                    "addresses": [
+                        {
+                            "address": "192.168.40.1/24"
+                        }
+                    ],
+                    "routes": [
+                        {
+                            "destination": "192.168.41.0/24",
+                            "next": "192.168.40.2",
+                            "cost": 100
+                        },
+                        {
+                            "destination": "192.168.42.0/24",
+                            "next": "192.168.40.2",
+                            "cost": 100
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "MoonOrbiter1",
+            "type": "router",
+            "bufferSizeBytes": 1000000000,
+            "interfaces": [
+                {
+                    "addresses": [
+                        {
+                            "address": "192.168.40.2/24"
+                        }
+                    ],
+                    "routes": []
+                },
+                {
+                  "addresses": [
+                    {
+                      "address": "192.168.41.1/24"
+                    }
+                  ],
+                  "routes": [
+                    {
+                      "destination": "192.168.42.0/24",
+                      "next": "192.168.41.2",
+                      "cost": 100
+                    }
+                ]
+                  }
+            ]
+        },
+        {
+            "id": "MoonAsset1",
+            "type": "host",
+            "bufferSizeBytes": 1000000000,
+            "interfaces": [
+                {
+                    "addresses": [
+                        {
+                            "address": "192.168.41.2/24"
+                        }
+                    ],
+                    "routes": [
+                        {
+                            "destination": "192.168.40.0/24",
+                            "next": "192.168.41.1",
+                            "cost": 100
+                        }
+                    ]
+                },
+                {
+                    "addresses": [
+                        {
+                            "address": "192.168.42.1/24"
+                        }
+                    ],
+                    "routes": []
+                }
+            ]
+        }
+    ],
+    "links": [
+      {
+        "id": "Earth1-MoonOrbiter1",
+        "source": "192.168.40.1",
+        "target": "192.168.40.2",
+        "delay_ms": 1500,
+        "bandwidth_bps": 10000000
+      },
+      {
+        "id": "MoonOrbiter1-Earth1",
+        "source": "192.168.40.2",
+        "target": "192.168.40.1",
+        "delay_ms": 1500,
+        "bandwidth_bps": 10000000
+      },
+      {
+        "id": "MoonOrbiter1-MoonAsset1",
+        "source": "192.168.41.1",
+        "target": "192.168.41.2",
+        "delay_ms": 300,
+        "bandwidth_bps": 10000000
+      },
+      {
+        "id": "MoonAsset1-MoonOrbiter1",
+        "source": "192.168.41.2",
+        "target": "192.168.41.1",
+        "delay_ms": 300,
+        "bandwidth_bps": 10000000
+      }
+    ]
+}
