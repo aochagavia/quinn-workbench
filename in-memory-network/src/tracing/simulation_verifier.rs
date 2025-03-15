@@ -3,11 +3,11 @@ use crate::network::spec::{NetworkSpec, NodeKind};
 use crate::tracing::simulation_step::{
     GenericPacketEvent, PacketDropped, SimulationStep, SimulationStepKind,
 };
-use crate::tracing::simulation_verifier::InvalidSimulation::PacketCreatedByRouterNode;
 use crate::tracing::simulation_verifier::replayed::ReplayedLink;
 use crate::tracing::stats::{LinkStats, NodeStats, PacketStats};
 use anyhow::{anyhow, bail};
 use std::collections::{HashMap, HashSet};
+use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{cmp, mem};
@@ -15,16 +15,46 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub struct VerifiedSimulation {
+    pub stats: SimulationStats,
+    pub non_fatal_errors: Vec<NonFatalError>,
+}
+
+pub struct SimulationStats {
     pub stats_by_node: HashMap<Arc<str>, NodeStats>,
     pub stats_by_link: HashMap<Arc<str>, LinkStats>,
 }
 
+#[derive(Debug)]
+pub struct InvalidSimulation {
+    fatal_error: Option<FatalError>,
+    non_fatal_errors: Vec<NonFatalError>,
+}
+
+impl Display for InvalidSimulation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if let Some(e) = &self.fatal_error {
+            f.write_str("Fatal error:\n")?;
+            Display::fmt(e, f)?;
+        }
+
+        if !self.non_fatal_errors.is_empty() {
+            f.write_str("\nOther errors:\n")?;
+        }
+
+        for e in &self.non_fatal_errors {
+            f.write_str("* ")?;
+            Display::fmt(e, f)?;
+            f.write_str("\n")?;
+        }
+
+        Ok(())
+    }
+}
+
+impl std::error::Error for InvalidSimulation {}
+
 #[derive(Error, Debug)]
-pub enum InvalidSimulation {
-    #[error("network node `{node_id}` was referenced but does not exist")]
-    MissingNode { node_id: Arc<str> },
-    #[error("network link `{link_id}` was referenced but does not exist")]
-    MissingLink { link_id: Arc<str> },
+pub enum NonFatalError {
     #[error(
         "network node `{node_id}` is storing {max_buffer_usage} bytes, but its buffer is of {buffer_size_bytes} bytes"
     )]
@@ -33,14 +63,8 @@ pub enum InvalidSimulation {
         buffer_size_bytes: usize,
         max_buffer_usage: usize,
     },
-    #[error("network node received packet with id `{packet_id}` multiple times")]
-    PacketAlreadyReceived { packet_id: Uuid },
     #[error("network node `{node_id}` created a packet out of thin air (packet `{packet_id}`)")]
     PacketCreatedByRouterNode { node_id: Arc<str>, packet_id: Uuid },
-    #[error(
-        "network node references packet `{packet_id}`, but according to the trace the packet is not present in the node at this moment"
-    )]
-    MissingPacket { packet_id: Uuid },
     #[error(
         "packet `{packet_id}` was marked as lost in transit, but according to the trace the packet was not in transit at that moment"
     )]
@@ -60,15 +84,6 @@ pub enum InvalidSimulation {
         link_id: Arc<str>,
     },
     #[error(
-        "network node `{node_id}` received a packet through link `{link_id}`, but said link became unavailable while the packet was in flight (packet sent at {packet_sent_ns} ns, link was last down at {link_last_down_ns} ns)"
-    )]
-    OfflinePacketReceive {
-        node_id: Arc<str>,
-        link_id: Arc<str>,
-        packet_sent_ns: u128,
-        link_last_down_ns: u128,
-    },
-    #[error(
         "network node `{node_id}` received a packet through link `{link_id}`, but according to the network graph the node is not connected to that link as a receiver"
     )]
     DisconnectedPacketReceive {
@@ -83,14 +98,52 @@ pub enum InvalidSimulation {
         link_id: Arc<str>,
     },
     #[error(
-        "network node `{node_id}` sent a packet through link `{link_id}`, but the link didn't have enough available bandwidth (link bandwidth is {max_bps} bps, but used bandwidth was {observed_bps} bps)"
+        "network node `{node_id}` received a packet through link `{link_id}`, but said link became unavailable while the packet was in flight (packet sent at {packet_sent_ns} ns, link was last down at {link_last_down_ns} ns)"
+    )]
+    OfflinePacketReceive {
+        node_id: Arc<str>,
+        link_id: Arc<str>,
+        packet_sent_ns: u128,
+        link_last_down_ns: u128,
+    },
+    #[error(
+        "network node `{node_id}` sent packet `{packet_id}` through link `{link_id}`, but the link didn't have enough available bandwidth (link bandwidth is {max_bps} bps, but used bandwidth was {observed_bps} bps)"
     )]
     LinkBandwidthExceeded {
         node_id: Arc<str>,
         link_id: Arc<str>,
+        packet_id: Uuid,
         max_bps: usize,
         observed_bps: usize,
     },
+}
+
+#[derive(Error, Debug)]
+pub enum FatalError {
+    #[error("network node `{node_id}` was referenced but does not exist")]
+    MissingNode { node_id: Arc<str> },
+    #[error("network link `{link_id}` was referenced but does not exist")]
+    MissingLink { link_id: Arc<str> },
+    #[error(
+        "network node references packet `{packet_id}`, but according to the trace the packet is not present in the node at this moment"
+    )]
+    MissingPacket { packet_id: Uuid },
+    #[error("network node received packet with id `{packet_id}` multiple times")]
+    PacketAlreadyReceived { packet_id: Uuid },
+}
+
+macro_rules! try_fatal {
+    ($expr:expr, $non_fatal_errors:expr) => {
+        match $expr {
+            Ok(val) => val,
+            Err(err) => {
+                return Err(InvalidSimulation {
+                    fatal_error: Some(err),
+                    non_fatal_errors: $non_fatal_errors,
+                });
+            }
+        }
+    };
 }
 
 #[derive(Default)]
@@ -108,6 +161,8 @@ pub struct SimulationVerifier {
     node_metadata: HashMap<Arc<str>, NodeMetadata>,
     /// Map from links to metadata useful for verification
     link_metadata: HashMap<Arc<str>, LinkMetadata>,
+    /// Errors which don't prevent the verifier from continuing
+    non_fatal_errors: Vec<NonFatalError>,
 }
 
 impl SimulationVerifier {
@@ -189,7 +244,10 @@ impl SimulationVerifier {
         let mut stats_by_link: HashMap<_, LinkStats> = HashMap::new();
         for step in steps {
             if step.relative_time != last_step_time {
-                self.update_max_buffer_usage()?;
+                if let Err(e) = self.update_max_buffer_usage() {
+                    self.non_fatal_errors.push(e);
+                }
+
                 last_buffer_usage_update = Some(last_step_time);
                 last_step_time = step.relative_time;
             }
@@ -200,109 +258,127 @@ impl SimulationVerifier {
                         // Check that the link is actually connected to the target node
                         let link_metadata = self.link_metadata.get(&in_flight.link_id).unwrap();
                         if s.node_id != link_metadata.target_node_id {
-                            return Err(InvalidSimulation::DisconnectedPacketReceive {
-                                node_id: s.node_id.clone(),
-                                link_id: in_flight.link_id.clone(),
-                            });
+                            self.non_fatal_errors
+                                .push(NonFatalError::DisconnectedPacketReceive {
+                                    node_id: s.node_id.clone(),
+                                    link_id: in_flight.link_id.clone(),
+                                });
                         }
 
                         // Check that transmission took enough time
                         let time_in_flight = step.relative_time - in_flight.sent_at_relative;
                         if time_in_flight < link_metadata.delay + in_flight.extra_delay {
-                            return Err(InvalidSimulation::TooFastPacketReceive {
-                                node_id: s.node_id.clone(),
-                                link_id: in_flight.link_id,
-                            });
+                            self.non_fatal_errors
+                                .push(NonFatalError::TooFastPacketReceive {
+                                    node_id: s.node_id.clone(),
+                                    link_id: in_flight.link_id.clone(),
+                                });
                         }
 
                         // Check that the link didn't go down after sending (i.e. forbid up -> down -> up)
-                        let link = self.link(&in_flight.link_id)?;
+                        let link = try_fatal!(self.link(&in_flight.link_id), self.non_fatal_errors);
                         match link.last_down() {
                             Some(last_down_relative)
                                 if last_down_relative >= in_flight.sent_at_relative =>
                             {
-                                return Err(InvalidSimulation::OfflinePacketReceive {
-                                    node_id: s.node_id.clone(),
-                                    link_id: in_flight.link_id.clone(),
-                                    packet_sent_ns: in_flight.sent_at_relative.as_nanos(),
-                                    link_last_down_ns: last_down_relative.as_nanos(),
-                                });
+                                self.non_fatal_errors
+                                    .push(NonFatalError::OfflinePacketReceive {
+                                        node_id: s.node_id.clone(),
+                                        link_id: in_flight.link_id.clone(),
+                                        packet_sent_ns: in_flight.sent_at_relative.as_nanos(),
+                                        link_last_down_ns: last_down_relative.as_nanos(),
+                                    });
                             }
                             _ => {}
                         }
 
-                        self.node(&s.node_id)?.packet_received(s)?;
+                        let node = try_fatal!(self.node(&s.node_id), self.non_fatal_errors);
+                        try_fatal!(node.packet_received(s), self.non_fatal_errors);
                     } else {
                         // The packet was not in flight, so it must have just been created at
                         // one of the hosts
                         if !self.host_nodes.contains(&s.node_id) {
-                            return Err(PacketCreatedByRouterNode {
-                                node_id: s.node_id.clone(),
-                                packet_id: s.packet_id,
-                            });
+                            self.non_fatal_errors
+                                .push(NonFatalError::PacketCreatedByRouterNode {
+                                    node_id: s.node_id.clone(),
+                                    packet_id: s.packet_id,
+                                });
                         }
 
-                        self.node(&s.node_id)?.packet_created(s)?;
+                        let node = try_fatal!(self.node(&s.node_id), self.non_fatal_errors);
+                        try_fatal!(node.packet_created(s), self.non_fatal_errors);
                     }
                 }
                 SimulationStepKind::PacketDuplicated(s) => {
-                    self.node(&s.node_id)?.packet_duplicated(s)?;
+                    let node = try_fatal!(self.node(&s.node_id), self.non_fatal_errors);
+                    try_fatal!(node.packet_duplicated(s), self.non_fatal_errors);
                 }
                 SimulationStepKind::PacketDropped(s) => {
-                    self.node(&s.node_id)?.packet_dropped(s)?;
+                    let node = try_fatal!(self.node(&s.node_id), self.non_fatal_errors);
+                    try_fatal!(node.packet_dropped(s), self.non_fatal_errors);
                 }
                 SimulationStepKind::PacketLostInTransit(s) => {
-                    let Some(packet) = self.in_flight_packets.remove(&s.packet_id) else {
-                        return Err(InvalidSimulation::MissingLostPacket {
-                            packet_id: s.packet_id,
-                        });
-                    };
-
-                    stats_by_link
-                        .entry(s.link_id.clone())
-                        .or_default()
-                        .dropped_in_transit
-                        .track_one(packet.size_bytes);
+                    if let Some(packet) = self.in_flight_packets.remove(&s.packet_id) {
+                        stats_by_link
+                            .entry(s.link_id.clone())
+                            .or_default()
+                            .dropped_in_transit
+                            .track_one(packet.size_bytes);
+                    } else {
+                        self.non_fatal_errors
+                            .push(NonFatalError::MissingLostPacket {
+                                packet_id: s.packet_id,
+                            });
+                    }
                 }
                 SimulationStepKind::PacketInTransit(s) => {
-                    let packet = self.node(&s.node_id)?.packet_sent(s.packet_id)?;
+                    let node = try_fatal!(self.node(&s.node_id), self.non_fatal_errors);
+                    let packet = try_fatal!(node.packet_sent(s.packet_id), self.non_fatal_errors);
 
                     // Check that the link is actually connected to the source node
-                    let link_metadata = self.link_metadata.get(&s.link_id).cloned().ok_or(
-                        InvalidSimulation::MissingLink {
-                            link_id: s.link_id.clone(),
-                        },
-                    )?;
+                    let link_metadata = try_fatal!(
+                        self.link_metadata.get(&s.link_id).cloned().ok_or(
+                            FatalError::MissingLink {
+                                link_id: s.link_id.clone(),
+                            }
+                        ),
+                        self.non_fatal_errors
+                    );
                     if s.node_id != link_metadata.source_node_id {
-                        return Err(InvalidSimulation::DisconnectedPacketSend {
-                            node_id: s.node_id.clone(),
-                            link_id: s.link_id.clone(),
-                        });
+                        self.non_fatal_errors
+                            .push(NonFatalError::DisconnectedPacketSend {
+                                node_id: s.node_id.clone(),
+                                link_id: s.link_id.clone(),
+                            });
                     }
 
                     // Check that the link is up
-                    let link = self.link(&s.link_id)?;
+                    let link = try_fatal!(self.link(&s.link_id), self.non_fatal_errors);
                     if !link.is_up() {
-                        return Err(InvalidSimulation::OfflinePacketSend {
-                            node_id: s.node_id.clone(),
-                            link_id: s.link_id.clone(),
-                        });
+                        self.non_fatal_errors
+                            .push(NonFatalError::OfflinePacketSend {
+                                node_id: s.node_id.clone(),
+                                link_id: s.link_id.clone(),
+                            });
                     }
 
                     // Track the packet send at the link level, to ensure we stay within the link's
                     // bandwidth
+                    let link = try_fatal!(self.link(&s.link_id), self.non_fatal_errors);
                     let used_bandwidth_bps = link.packet_sent(
                         step.relative_time,
                         packet.size_bytes,
                         link_metadata.bandwidth_bps,
                     );
                     if link_metadata.bandwidth_bps < used_bandwidth_bps {
-                        return Err(InvalidSimulation::LinkBandwidthExceeded {
-                            node_id: s.node_id.clone(),
-                            link_id: s.link_id.clone(),
-                            max_bps: link_metadata.bandwidth_bps,
-                            observed_bps: used_bandwidth_bps,
-                        });
+                        self.non_fatal_errors
+                            .push(NonFatalError::LinkBandwidthExceeded {
+                                node_id: s.node_id.clone(),
+                                link_id: s.link_id.clone(),
+                                packet_id: s.packet_id,
+                                max_bps: link_metadata.bandwidth_bps,
+                                observed_bps: used_bandwidth_bps,
+                            });
                     }
 
                     self.in_flight_packets.insert(
@@ -317,33 +393,42 @@ impl SimulationVerifier {
                 }
 
                 SimulationStepKind::PacketCongestionEvent(s) => {
-                    self.node(&s.node_id)?.packet_ecn(s);
+                    let node = try_fatal!(self.node(&s.node_id), self.non_fatal_errors);
+                    node.packet_ecn(s);
                 }
 
                 SimulationStepKind::PacketDeliveredToApplication(s) => {
-                    self.node(&s.node_id)?.packet_delivered(s.packet_id)?;
+                    let node = try_fatal!(self.node(&s.node_id), self.non_fatal_errors);
+                    try_fatal!(node.packet_delivered(s.packet_id), self.non_fatal_errors);
                 }
 
                 SimulationStepKind::PacketExtraDelay(s) => {
-                    self.node(&s.node_id)?
-                        .packet_has_extra_delay(s.packet_id, s.extra_delay)?;
+                    let node = try_fatal!(self.node(&s.node_id), self.non_fatal_errors);
+                    try_fatal!(
+                        node.packet_has_extra_delay(s.packet_id, s.extra_delay),
+                        self.non_fatal_errors
+                    );
                 }
 
                 SimulationStepKind::NetworkEvent(e) => {
                     if let Some(status) = e.status {
-                        let link = self.links.get_mut(&e.link_id).ok_or(
-                            InvalidSimulation::MissingLink {
+                        let link = self
+                            .links
+                            .get_mut(&e.link_id)
+                            .ok_or(FatalError::MissingLink {
                                 link_id: e.link_id.clone(),
-                            },
-                        )?;
-                        link.set_status(status, step.relative_time);
+                            });
+                        try_fatal!(link, self.non_fatal_errors)
+                            .set_status(status, step.relative_time);
                     }
                 }
             }
         }
 
         if last_buffer_usage_update != Some(last_step_time) {
-            self.update_max_buffer_usage()?;
+            if let Err(e) = self.update_max_buffer_usage() {
+                self.non_fatal_errors.push(e);
+            }
         }
 
         let stats_by_node = self
@@ -367,36 +452,45 @@ impl SimulationVerifier {
             .collect();
 
         Ok(VerifiedSimulation {
-            stats_by_node,
-            stats_by_link,
+            stats: SimulationStats {
+                stats_by_node,
+                stats_by_link,
+            },
+            non_fatal_errors: self.non_fatal_errors,
         })
     }
 
-    fn update_max_buffer_usage(&mut self) -> Result<(), InvalidSimulation> {
+    fn update_max_buffer_usage(&mut self) -> Result<(), NonFatalError> {
         for (node_id, node) in &mut self.nodes {
             let max_buffer_usage = node.update_max_buffer_usage();
             let buffer_size = self.node_metadata[node_id].buffer_size_bytes;
-            if buffer_size < max_buffer_usage {}
+            if buffer_size < max_buffer_usage {
+                return Err(NonFatalError::NodeExceedsBufferSize {
+                    node_id: node_id.clone(),
+                    buffer_size_bytes: buffer_size,
+                    max_buffer_usage,
+                });
+            }
         }
 
         Ok(())
     }
 
-    fn node(&mut self, node_id: &Arc<str>) -> Result<&mut ReplayedNode, InvalidSimulation> {
+    fn node(&mut self, node_id: &Arc<str>) -> Result<&mut ReplayedNode, FatalError> {
         if let Some(node) = self.nodes.get_mut(node_id) {
             Ok(node)
         } else {
-            Err(InvalidSimulation::MissingNode {
+            Err(FatalError::MissingNode {
                 node_id: node_id.clone(),
             })
         }
     }
 
-    fn link(&mut self, link_id: &Arc<str>) -> Result<&mut ReplayedLink, InvalidSimulation> {
+    fn link(&mut self, link_id: &Arc<str>) -> Result<&mut ReplayedLink, FatalError> {
         if let Some(link) = self.links.get_mut(link_id) {
             Ok(link)
         } else {
-            Err(InvalidSimulation::MissingLink {
+            Err(FatalError::MissingLink {
                 link_id: link_id.clone(),
             })
         }
@@ -419,11 +513,11 @@ struct ReplayedNode {
 }
 
 impl ReplayedNode {
-    fn packet_created(&mut self, s: &GenericPacketEvent) -> Result<(), InvalidSimulation> {
+    fn packet_created(&mut self, s: &GenericPacketEvent) -> Result<(), FatalError> {
         self.add_packet_to_buffer(s.packet_id, s.packet_size_bytes)
     }
 
-    fn packet_received(&mut self, s: &GenericPacketEvent) -> Result<(), InvalidSimulation> {
+    fn packet_received(&mut self, s: &GenericPacketEvent) -> Result<(), FatalError> {
         if self.highest_received > s.packet_number {
             self.reordered_packets_received
                 .track_one(s.packet_size_bytes);
@@ -434,22 +528,22 @@ impl ReplayedNode {
         self.add_packet_to_buffer(s.packet_id, s.packet_size_bytes)
     }
 
-    fn packet_duplicated(&mut self, s: &GenericPacketEvent) -> Result<(), InvalidSimulation> {
+    fn packet_duplicated(&mut self, s: &GenericPacketEvent) -> Result<(), FatalError> {
         self.duplicated_packets.track_one(s.packet_size_bytes);
         self.add_packet_to_buffer(s.packet_id, s.packet_size_bytes)
     }
 
-    fn packet_sent(&mut self, packet_id: Uuid) -> Result<ReplayedPacket, InvalidSimulation> {
+    fn packet_sent(&mut self, packet_id: Uuid) -> Result<ReplayedPacket, FatalError> {
         let packet = self.remove_packet_from_buffer(packet_id)?;
         self.sent_packets.track_one(packet.size_bytes);
         Ok(packet)
     }
 
-    fn packet_delivered(&mut self, packet_id: Uuid) -> Result<ReplayedPacket, InvalidSimulation> {
+    fn packet_delivered(&mut self, packet_id: Uuid) -> Result<ReplayedPacket, FatalError> {
         self.remove_packet_from_buffer(packet_id)
     }
 
-    fn packet_dropped(&mut self, s: &PacketDropped) -> Result<(), InvalidSimulation> {
+    fn packet_dropped(&mut self, s: &PacketDropped) -> Result<(), FatalError> {
         let packet = self.remove_packet_from_buffer(s.packet_id)?;
         if s.injected {
             self.dropped_packets_injected.track_one(packet.size_bytes);
@@ -469,11 +563,11 @@ impl ReplayedNode {
         &mut self,
         packet_id: Uuid,
         delay: Duration,
-    ) -> anyhow::Result<(), InvalidSimulation> {
+    ) -> anyhow::Result<(), FatalError> {
         let packet = self
             .packets
             .get_mut(&packet_id)
-            .ok_or(InvalidSimulation::MissingPacket { packet_id })?;
+            .ok_or(FatalError::MissingPacket { packet_id })?;
         packet.extra_delay = delay;
         Ok(())
     }
@@ -487,7 +581,7 @@ impl ReplayedNode {
         &mut self,
         packet_id: Uuid,
         size_bytes: usize,
-    ) -> Result<(), InvalidSimulation> {
+    ) -> Result<(), FatalError> {
         let already_exists = self
             .packets
             .insert(
@@ -499,7 +593,7 @@ impl ReplayedNode {
             )
             .is_some();
         if already_exists {
-            return Err(InvalidSimulation::PacketAlreadyReceived { packet_id });
+            return Err(FatalError::PacketAlreadyReceived { packet_id });
         }
 
         self.buffer_usage += size_bytes;
@@ -507,15 +601,12 @@ impl ReplayedNode {
         Ok(())
     }
 
-    fn remove_packet_from_buffer(
-        &mut self,
-        packet_id: Uuid,
-    ) -> Result<ReplayedPacket, InvalidSimulation> {
+    fn remove_packet_from_buffer(&mut self, packet_id: Uuid) -> Result<ReplayedPacket, FatalError> {
         if let Some(packet) = self.packets.remove(&packet_id) {
             self.buffer_usage = self.buffer_usage.checked_sub(packet.size_bytes).unwrap();
             Ok(packet)
         } else {
-            Err(InvalidSimulation::MissingPacket { packet_id })
+            Err(FatalError::MissingPacket { packet_id })
         }
     }
 }

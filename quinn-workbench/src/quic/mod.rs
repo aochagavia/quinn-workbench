@@ -59,7 +59,7 @@ pub async fn run_and_report_stats(
             "client" => client_node.id().clone(),
             _ => unreachable!(),
         };
-        let stats = &verified_simulation.stats_by_node[&name];
+        let stats = &verified_simulation.stats.stats_by_node[&name];
 
         println!("* {name} ({node})");
 
@@ -91,7 +91,7 @@ pub async fn run_and_report_stats(
     }
 
     println!("--- Max buffer usage per node ---");
-    let mut buffer_usage: Vec<_> = verified_simulation.stats_by_node.iter().collect();
+    let mut buffer_usage: Vec<_> = verified_simulation.stats.stats_by_node.iter().collect();
     buffer_usage.sort_unstable_by(|t1, t2| {
         t1.1.max_buffer_usage
             .cmp(&t2.1.max_buffer_usage)
@@ -104,16 +104,36 @@ pub async fn run_and_report_stats(
         );
     }
 
-    if !verified_simulation.stats_by_link.is_empty() {
+    if !verified_simulation.stats.stats_by_link.is_empty() {
         println!("--- Link stats ---");
     }
-    let mut link_stats: Vec<_> = verified_simulation.stats_by_link.iter().collect();
+    let mut link_stats: Vec<_> = verified_simulation.stats.stats_by_link.iter().collect();
     link_stats.sort_unstable_by_key(|(id, _)| *id);
     for (link_id, stats) in link_stats {
         println!(
             "* {link_id}: {} packets lost in transit ({} bytes)",
             stats.dropped_in_transit.packets, stats.dropped_in_transit.bytes
         );
+    }
+
+    const DISPLAY_MAX_ERRORS: usize = 10;
+    if !verified_simulation.non_fatal_errors.is_empty() {
+        print!("--- Errors");
+        if verified_simulation.non_fatal_errors.len() > DISPLAY_MAX_ERRORS {
+            print!(
+                "(showing {DISPLAY_MAX_ERRORS} of {})",
+                verified_simulation.non_fatal_errors.len()
+            );
+        }
+
+        println!(" ---");
+    }
+    for error in verified_simulation
+        .non_fatal_errors
+        .into_iter()
+        .take(DISPLAY_MAX_ERRORS)
+    {
+        println!("* {error}");
     }
 
     if result.is_err() {
