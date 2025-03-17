@@ -641,13 +641,12 @@ mod replayed {
 
         pub fn packet_sent(
             &mut self,
-            timestamp: Duration,
+            now: Duration,
             size_bytes: usize,
             link_bandwidth_bps: usize,
         ) -> usize {
             let size_bits = size_bytes * 8;
-            self.packets_using_bandwidth
-                .push_back((timestamp, size_bits));
+            self.packets_using_bandwidth.push_back((now, size_bits));
             self.used_bandwidth_bps_in_current_window += size_bits;
 
             // 9600 is the minimum packet size, so if a link can send less than that per second, it
@@ -656,15 +655,15 @@ mod replayed {
             let window_seconds = if link_bandwidth_bps < 9600 { 10 } else { 1 };
 
             loop {
-                let Some((first_timestamp, first_size_bits)) =
+                let Some((first_send_in_window, first_size_bits)) =
                     self.packets_using_bandwidth.front().copied()
                 else {
                     break;
                 };
 
-                let first_is_stale =
-                    timestamp - first_timestamp > Duration::from_secs(window_seconds);
-                if first_is_stale {
+                let first_is_out_of_window =
+                    now > first_send_in_window + Duration::from_secs(window_seconds);
+                if first_is_out_of_window {
                     self.packets_using_bandwidth.pop_front();
                     self.used_bandwidth_bps_in_current_window -= first_size_bits;
                 } else {

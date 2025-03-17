@@ -6,6 +6,7 @@ use parking_lot::Mutex;
 use quinn::udp::{RecvMeta, Transmit};
 use quinn::{AsyncUdpSocket, UdpPoller};
 use std::fmt::{Debug, Formatter};
+use std::io;
 use std::io::IoSliceMut;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -16,7 +17,7 @@ use std::task::{Context, Poll, ready};
 pub struct InMemoryUdpPoller;
 
 impl UdpPoller for InMemoryUdpPoller {
-    fn poll_writable(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<std::io::Result<()>> {
+    fn poll_writable(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))
     }
 }
@@ -39,7 +40,7 @@ impl AsyncUdpSocket for InMemoryUdpSocket {
         Box::pin(InMemoryUdpPoller)
     }
 
-    fn try_send(&self, transmit: &Transmit) -> std::io::Result<()> {
+    fn try_send(&self, transmit: &Transmit) -> io::Result<()> {
         // We don't have code to handle GSO, so let's ensure transmits are always a single UDP
         // packet
         assert!(transmit.segment_size.is_none());
@@ -63,7 +64,7 @@ impl AsyncUdpSocket for InMemoryUdpSocket {
         cx: &mut Context,
         bufs: &mut [IoSliceMut<'_>],
         meta: &mut [RecvMeta],
-    ) -> Poll<std::io::Result<usize>> {
+    ) -> Poll<io::Result<usize>> {
         let node = self.node.clone();
         let max_transmits = meta.len();
         assert!(meta.len() <= bufs.len());
@@ -98,7 +99,78 @@ impl AsyncUdpSocket for InMemoryUdpSocket {
         Poll::Ready(Ok(delivered_len))
     }
 
-    fn local_addr(&self) -> std::io::Result<SocketAddr> {
+    fn local_addr(&self) -> io::Result<SocketAddr> {
         Ok(self.endpoint.addr)
+    }
+}
+
+impl InMemoryUdpSocket {
+    pub async fn receive<'a>(
+        &self,
+        bufs_and_meta: &'a mut BufsAndMeta,
+    ) -> io::Result<Vec<UdpPacket<'a>>> {
+        let packets = self.receive_raw(bufs_and_meta).await?;
+
+        let mut result = Vec::with_capacity(packets);
+        for i in 0..packets {
+            let meta = &bufs_and_meta.meta[i];
+            let source_addr = meta.addr;
+            let payload = &bufs_and_meta.bufs[i][..meta.len];
+
+            result.push(UdpPacket {
+                source_addr,
+                payload,
+            });
+        }
+
+        Ok(result)
+    }
+
+    pub async fn receive_raw(&self, bufs_and_meta: &mut BufsAndMeta) -> io::Result<usize> {
+        let receive = UdpReceive {
+            socket: self,
+            result: bufs_and_meta,
+        };
+
+        receive.await
+    }
+}
+
+pub struct UdpPacket<'a> {
+    pub source_addr: SocketAddr,
+    pub payload: &'a [u8],
+}
+
+pub struct UdpReceive<'a, 'b> {
+    socket: &'a dyn AsyncUdpSocket,
+    result: &'b mut BufsAndMeta,
+}
+
+pub struct BufsAndMeta {
+    pub bufs: Vec<Vec<u8>>,
+    pub meta: Vec<RecvMeta>,
+}
+
+impl BufsAndMeta {
+    pub fn new(max_packet_size: usize, max_packets_per_read: usize) -> Self {
+        Self {
+            bufs: vec![vec![0u8; max_packet_size]; max_packets_per_read],
+            meta: vec![RecvMeta::default(); max_packets_per_read],
+        }
+    }
+}
+
+impl Future for UdpReceive<'_, '_> {
+    type Output = io::Result<usize>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = &mut *self;
+
+        let socket = &mut this.socket;
+        let bufs = &mut this.result.bufs;
+        let meta = &mut this.result.meta;
+
+        let mut bufs: Vec<_> = bufs.iter_mut().map(|b| IoSliceMut::new(b)).collect();
+        socket.poll_recv(cx, &mut bufs, meta)
     }
 }

@@ -36,22 +36,16 @@ mod test {
         NetworkInterface, NetworkLinkSpec, NetworkNodeSpec, NetworkSpec, NodeKind,
     };
     use crate::pcap_exporter::PcapExporter;
-    use crate::quinn_interop::InMemoryUdpSocket;
+    use crate::quinn_interop::BufsAndMeta;
     use crate::tracing::tracer::SimulationStepTracer;
     use bon::builder;
     use fastrand::Rng;
     use quinn::crypto::rustls::QuicClientConfig;
     use quinn::rustls::RootCertStore;
     use quinn::rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
-    use quinn::udp::RecvMeta;
-    use quinn::{AsyncUdpSocket, ClientConfig, Endpoint, EndpointConfig, ServerConfig, rustls};
-    use std::future::Future;
-    use std::io;
-    use std::io::IoSliceMut;
+    use quinn::{ClientConfig, Endpoint, EndpointConfig, ServerConfig, rustls};
     use std::net::Ipv4Addr;
-    use std::pin::Pin;
     use std::sync::Arc;
-    use std::task::{Context, Poll};
     use std::time::Duration;
     use tokio::time::Instant;
 
@@ -331,28 +325,23 @@ mod test {
 
         // Test
         let network = default_network().call();
-        let server_socket = network.host(SERVER_ADDR.as_ip_addr());
-        let client_socket = network.host(CLIENT_ADDR.as_ip_addr());
+        let server_node = network.host(SERVER_ADDR.as_ip_addr());
+        let client_node = network.host(CLIENT_ADDR.as_ip_addr());
         let data = network.in_transit_data(
-            &client_socket,
+            &client_node,
             OwnedTransmit {
-                destination: server_socket.quic_addr(),
+                destination: server_node.quic_addr(),
                 ecn: None,
                 contents: b"hello world".to_vec(),
                 segment_size: None,
             },
         );
         let packet_id = data.id;
-        network.forward(client_socket.clone(), data);
+        network.forward(client_node.clone(), data);
 
-        let mut recv_result = BufsAndMeta::new();
-        let received = {
-            let host_receive = HostReceive {
-                socket: network.udp_socket_for_node((*server_socket).clone()),
-                result: &mut recv_result,
-            };
-            host_receive.await.unwrap()
-        };
+        let mut recv_result = BufsAndMeta::new(1200, 10);
+        let server_socket = network.udp_socket_for_node(server_node.clone());
+        let received = server_socket.receive_raw(&mut recv_result).await.unwrap();
 
         assert_eq!(received, 1);
         assert_eq!(recv_result.meta[0].len, 11);
@@ -396,15 +385,15 @@ mod test {
 
             // Actual test
             let network = default_network().bandwidth_bps(bandwidth).call();
-            let server_socket = network.host(SERVER_ADDR.as_ip_addr());
-            let client_socket = network.host(CLIENT_ADDR.as_ip_addr());
+            let server_node = network.host(SERVER_ADDR.as_ip_addr());
+            let client_node = network.host(CLIENT_ADDR.as_ip_addr());
 
             let mut packet_ids = Vec::new();
             for _ in 0..4 {
                 let data = network.in_transit_data(
-                    &client_socket,
+                    &client_node,
                     OwnedTransmit {
-                        destination: server_socket.quic_addr(),
+                        destination: server_node.quic_addr(),
                         ecn: None,
                         contents: vec![42; 1200],
                         segment_size: None,
@@ -412,21 +401,14 @@ mod test {
                 );
 
                 packet_ids.push(data.id);
-                network.forward(client_socket.clone(), data.clone());
+                network.forward(client_node.clone(), data.clone());
             }
 
+            let mut recv_result = BufsAndMeta::new(1200, 10);
+            let server_socket = Arc::new(network.udp_socket_for_node(server_node.clone()));
             let mut received = 0;
             while received < 4 {
-                let mut recv_result = BufsAndMeta::new();
-                received += {
-                    let host_receive = HostReceive {
-                        socket: network.udp_socket_for_node(server_socket.clone()),
-                        result: &mut recv_result,
-                    };
-
-                    host_receive.await.unwrap()
-                };
-
+                received += server_socket.receive_raw(&mut recv_result).await.unwrap();
                 assert!(received >= 1);
                 assert_eq!(recv_result.meta[0].len, 1200);
             }
@@ -437,7 +419,7 @@ mod test {
 
             let mut arrival_times = Vec::new();
             for packet_id in packet_ids {
-                let packet_arrived = stepper.get_packet_arrived_at(packet_id, &server_socket.id);
+                let packet_arrived = stepper.get_packet_arrived_at(packet_id, &server_node.id);
                 arrival_times.push(packet_arrived.unwrap());
             }
 
@@ -499,15 +481,9 @@ mod test {
         let packet_id = data.id;
 
         network.forward(client_socket.clone(), data.clone());
-        let mut recv_result = BufsAndMeta::new();
-        let received = {
-            let host_receive = HostReceive {
-                socket: network.udp_socket_for_node((*server_socket).clone()),
-                result: &mut recv_result,
-            };
-
-            host_receive.await.unwrap()
-        };
+        let mut recv_result = BufsAndMeta::new(1200, 10);
+        let server_socket = Arc::new(network.udp_socket_for_node(server_socket.clone()));
+        let received = server_socket.receive_raw(&mut recv_result).await.unwrap();
 
         assert_eq!(received, 1);
         assert_eq!(recv_result.meta[0].len, 1200);
@@ -530,41 +506,6 @@ mod test {
         {
             assert_eq!(&*node, expected_node);
             assert_eq!(duration, expected_duration, "{node:?}");
-        }
-    }
-
-    // Utility future for testing a Host's `poll_recv`
-    struct HostReceive<'a> {
-        socket: InMemoryUdpSocket,
-        result: &'a mut BufsAndMeta,
-    }
-
-    struct BufsAndMeta {
-        bufs: Vec<Vec<u8>>,
-        meta: Vec<RecvMeta>,
-    }
-
-    impl BufsAndMeta {
-        fn new() -> Self {
-            Self {
-                bufs: vec![vec![0u8; 1500]; 4],
-                meta: vec![RecvMeta::default(); 4],
-            }
-        }
-    }
-
-    impl Future for HostReceive<'_> {
-        type Output = io::Result<usize>;
-
-        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            let this = &mut *self;
-
-            let socket = &mut this.socket;
-            let bufs = &mut this.result.bufs;
-            let meta = &mut this.result.meta;
-
-            let mut bufs: Vec<_> = bufs.iter_mut().map(|b| IoSliceMut::new(b)).collect();
-            socket.poll_recv(cx, &mut bufs, meta)
         }
     }
 }

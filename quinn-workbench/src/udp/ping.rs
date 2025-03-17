@@ -6,18 +6,16 @@ use in_memory_network::network::InMemoryNetwork;
 use in_memory_network::network::event::NetworkEvents;
 use in_memory_network::network::spec::NetworkSpec;
 use in_memory_network::pcap_exporter::PcapExporter;
+use in_memory_network::quinn_interop::BufsAndMeta;
 use in_memory_network::tracing::tracer::SimulationStepTracer;
 use parking_lot::Mutex;
 use quinn::AsyncUdpSocket;
-use quinn::udp::{RecvMeta, Transmit};
+use quinn::udp::Transmit;
 use std::collections::HashMap;
-use std::io::IoSliceMut;
+use std::fs;
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll, ready};
 use std::time::Duration;
-use std::{fs, io};
 use tokio::time::Instant;
 
 pub async fn run(
@@ -74,22 +72,24 @@ pub async fn run(
     // Server
     let server_socket_cp = server_socket.clone();
     tokio::spawn(async move {
-        loop {
-            // Receive next transmit
-            let receive = ReceiveUdp::new(server_socket.clone());
-            let packet = receive.await.unwrap();
-            assert_eq!(packet.source_addr.ip(), client_ip);
+        let mut bufs_and_meta = BufsAndMeta::new(1200, 5);
 
-            // Echo transmit
-            server_socket_cp
-                .try_send(&Transmit {
-                    destination: SocketAddr::new(client_ip, 8080),
-                    ecn: None,
-                    contents: &packet.payload,
-                    segment_size: None,
-                    src_ip: None,
-                })
-                .unwrap();
+        loop {
+            // Receive next transmits
+            for packet in server_socket.receive(&mut bufs_and_meta).await.unwrap() {
+                assert_eq!(packet.source_addr.ip(), client_ip);
+
+                // Echo transmit
+                server_socket_cp
+                    .try_send(&Transmit {
+                        destination: SocketAddr::new(client_ip, 8080),
+                        ecn: None,
+                        contents: packet.payload,
+                        segment_size: None,
+                        src_ip: None,
+                    })
+                    .unwrap();
+            }
         }
     });
 
@@ -144,22 +144,24 @@ pub async fn run(
 
     // Receiver
     tokio::spawn(async move {
+        let mut bufs_and_meta = BufsAndMeta::new(1200, 5);
+
         loop {
-            // Receive next transmit
-            let receive = ReceiveUdp::new(client_socket.clone());
-            let packet = receive.await.unwrap();
-            assert_eq!(packet.source_addr.ip(), server_ip);
+            // Receive next transmits
+            for packet in client_socket.receive(&mut bufs_and_meta).await.unwrap() {
+                assert_eq!(packet.source_addr.ip(), server_ip);
 
-            let ping_nr = u64::from_le_bytes(packet.payload.try_into().unwrap());
+                let ping_nr = u64::from_le_bytes(packet.payload.try_into().unwrap());
 
-            if let Some(ping_sent) = in_flight.lock().remove(&ping_nr) {
-                let ping_received = Instant::now();
-                println!(
-                    "{:.2}s - SENT | {:.2}s - RECEIVED | {:.2}s - DURATION",
-                    (ping_sent - simulation_start).as_secs_f64(),
-                    (ping_received - simulation_start).as_secs_f64(),
-                    (ping_received - ping_sent).as_secs_f64()
-                );
+                if let Some(ping_sent) = in_flight.lock().remove(&ping_nr) {
+                    let ping_received = Instant::now();
+                    println!(
+                        "{:.2}s - SENT | {:.2}s - RECEIVED | {:.2}s - DURATION",
+                        (ping_sent - simulation_start).as_secs_f64(),
+                        (ping_received - simulation_start).as_secs_f64(),
+                        (ping_received - ping_sent).as_secs_f64()
+                    );
+                }
             }
         }
     });
@@ -175,44 +177,4 @@ pub async fn run(
     println!("* Replay log available at {replay_log_path}");
 
     Ok(())
-}
-
-pub struct UdpPacket {
-    pub source_addr: SocketAddr,
-    pub payload: Vec<u8>,
-}
-
-pub struct ReceiveUdp {
-    socket: Pin<Arc<dyn AsyncUdpSocket>>,
-}
-
-impl ReceiveUdp {
-    pub fn new(socket: Pin<Arc<dyn AsyncUdpSocket>>) -> Self {
-        Self { socket }
-    }
-}
-
-impl Future for ReceiveUdp {
-    type Output = io::Result<UdpPacket>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut buf = vec![0; 1500];
-        let bufs = &mut [IoSliceMut::new(&mut buf)];
-        let recv_metas = &mut [RecvMeta::default()];
-
-        let read = ready!(self.socket.poll_recv(cx, bufs, recv_metas));
-        let read = match read {
-            Err(e) => return Poll::Ready(Err(e)),
-            Ok(r) => r,
-        };
-
-        assert_eq!(read, 1);
-
-        let meta = recv_metas[0];
-        buf.truncate(meta.len);
-        Poll::Ready(Ok(UdpPacket {
-            source_addr: meta.addr,
-            payload: buf,
-        }))
-    }
 }
