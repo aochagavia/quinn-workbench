@@ -5,7 +5,7 @@ mod udp;
 
 use crate::config::NetworkConfig;
 use crate::config::cli::Command;
-use crate::udp::ping;
+use crate::udp::{ping, throughput};
 use anyhow::Context;
 use clap::Parser;
 use config::cli::CliOpt;
@@ -54,6 +54,9 @@ fn main() -> anyhow::Result<()> {
             result
         }
         Command::Ping(ping_opt) => rt.block_on(ping::run(&opt, ping_opt, network_config)),
+        Command::Throughput(throughput_opt) => {
+            rt.block_on(throughput::run(&opt, throughput_opt, network_config))
+        }
     }
 }
 

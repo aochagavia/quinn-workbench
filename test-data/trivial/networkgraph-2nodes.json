@@ -1,0 +1,51 @@
+{
+    "type": "NetworkGraph",
+    "nodes": [
+        {
+            "id": "A",
+            "type": "host",
+            "bufferSizeBytes": 1000000000,
+            "interfaces": [
+                {
+                    "addresses": [
+                        {
+                            "address": "192.168.40.1/24"
+                        }
+                    ],
+                    "routes": []
+                }
+            ]
+        },
+        {
+            "id": "B",
+            "type": "host",
+            "bufferSizeBytes": 1000000000,
+            "interfaces": [
+                {
+                    "addresses": [
+                        {
+                            "address": "192.168.40.2/24"
+                        }
+                    ],
+                    "routes": []
+                }
+            ]
+        }
+    ],
+    "links": [
+      {
+        "id": "A->B",
+        "source": "192.168.40.1",
+        "target": "192.168.40.2",
+        "delay_ms": 1500,
+        "bandwidth_bps": 10000000
+      },
+      {
+        "id": "B->A",
+        "source": "192.168.40.2",
+        "target": "192.168.40.1",
+        "delay_ms": 1500,
+        "bandwidth_bps": 10000000
+      }
+    ]
+}

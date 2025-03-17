@@ -554,6 +554,7 @@ async fn process_buffer_for_node(
         }
 
         link.lock().send(&node, data, extra_delay);
+        link.lock().notify_packet_sent.notify_waiters();
     }
 }
 

@@ -45,6 +45,8 @@ pub enum Command {
     Quic(QuicOpt),
     /// Run a ping simulation at the UDP level
     Ping(PingOpt),
+    /// Run a throughput simulation at the UDP level
+    Throughput(ThroughputOpt),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -85,4 +87,17 @@ pub struct PingOpt {
     /// its reply are considered lost)
     #[arg(long, default_value_t = 10_000)]
     pub deadline_ms: u64,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct ThroughputOpt {
+    /// The duration of the run
+    #[arg(long)]
+    pub duration_ms: u64,
+
+    /// The bitrate at which information should be sent
+    ///
+    /// If not provided, we find the link with the highest capacity and use its doubled bandwidth
+    #[arg(long)]
+    pub send_bps: Option<u64>,
 }

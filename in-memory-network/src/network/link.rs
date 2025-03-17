@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{cmp, mem};
 use tokio::select;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -27,6 +28,7 @@ pub struct NetworkLink {
     status: LinkStatus,
     last_down: Option<Instant>,
     delay: Duration,
+    pub(crate) notify_packet_sent: Arc<Notify>,
     pub(crate) congestion_event_ratio: f64,
     pub(crate) extra_delay: Duration,
     pub(crate) extra_delay_ratio: f64,
@@ -76,6 +78,7 @@ impl NetworkLink {
             rate_calculator: DataRateCalculator::new(l.bandwidth_bps),
             packets_waiting_for_bandwidth_task: None,
             delay: l.delay,
+            notify_packet_sent: Arc::new(Notify::new()),
             congestion_event_ratio: l.congestion_event_ratio,
             extra_delay: l.extra_delay,
             extra_delay_ratio: l.extra_delay_ratio,
@@ -158,7 +161,7 @@ impl NetworkLink {
                 // Wait for the previous packets in the queue to be done
                 let result = task.await;
                 if let Err(e) = result {
-                    println!("ERROR: `wait_until_bandwidth_available` task crashed. Message: {e}")
+                    println!("ERROR: `sleep_until_ready_to_send` task crashed. Message: {e}")
                 }
             }
 
@@ -180,8 +183,14 @@ impl NetworkLink {
                 notifier_for_link_up.await.ok();
             }
 
+            let notify_packet_sent = this.lock().notify_packet_sent.clone();
+
             // Let observers know that the link is ready to send
             tx.send(this).ok();
+
+            // Only end the task after the packet has been sent. Otherwise, packets that are waiting
+            // will think they can be sent too because "there is available bandwidth".
+            notify_packet_sent.notified().await
         });
 
         this_cp.lock().packets_waiting_for_bandwidth_task = Some(new_task);
@@ -266,5 +275,42 @@ impl DataRateCalculator {
     fn track_send(&mut self, payload_size_bytes: usize) {
         assert!(self.has_bandwidth_available(Instant::now(), payload_size_bytes));
         self.available_bandwidth_bits -= payload_size_bytes.saturating_mul(8);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn test_drc_send_until_not_enough_bandwidth() {
+        let mut drc = DataRateCalculator::new(10_000_000);
+
+        // The max available bandwidth is tracked per 100ms, so it's 1/10th of the original one
+        assert_eq!(drc.available_bandwidth_bits, 1_000_000);
+
+        // Send in one go until not enough bandwidth available
+        for _ in 0..104 {
+            drc.track_send(1200);
+        }
+        assert_eq!(drc.available_bandwidth_bits, 1600);
+        assert!(!drc.has_bandwidth_available(Instant::now(), 1200));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_drc_bandwidth_regen() {
+        let mut drc = DataRateCalculator::new(10_000_000);
+
+        // Send until not enough bandwidth available
+        for _ in 0..104 {
+            drc.track_send(1200);
+        }
+        assert_eq!(drc.available_bandwidth_bits, 1600);
+        assert!(!drc.has_bandwidth_available(Instant::now(), 1200));
+
+        // Bandwidth regen happens at the expected rate
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(drc.has_bandwidth_available(Instant::now(), 1200));
+        assert_eq!(drc.available_bandwidth_bits, 1600 + 100_000);
     }
 }
