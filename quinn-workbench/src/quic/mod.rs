@@ -64,28 +64,28 @@ pub async fn run_and_report_stats(
         println!("* {name} ({node})");
 
         println!(
-            "  * Sent packets: {} ({} bytes)",
+            "  * Sent packets: {} ({} paylod bytes)",
             stats.sent.packets, stats.sent.bytes,
         );
         println!(
-            "    | {} packets duplicated in transit ({} bytes)",
+            "    | {} packets duplicated in transit ({} payload bytes)",
             stats.duplicates.packets, stats.duplicates.bytes
         );
         println!(
-            "    | {} packets marked with the CE ECN codepoint in transit ({} bytes)",
+            "    | {} packets marked with the CE ECN codepoint in transit ({} payload bytes)",
             stats.congestion_experienced.packets, stats.congestion_experienced.bytes
         );
         println!(
-            "    | {} packets dropped in transit ({} bytes)",
+            "    | {} packets dropped in transit ({} payload bytes)",
             stats.dropped_injected.packets + stats.dropped_buffer_full.packets,
             stats.dropped_injected.bytes + stats.dropped_buffer_full.bytes
         );
         println!(
-            "  * Received packets: {} ({} bytes)",
+            "  * Received packets: {} ({} payload bytes)",
             stats.received.packets, stats.received.bytes
         );
         println!(
-            "    | {} packets received out of order ({} bytes)",
+            "    | {} packets received out of order ({} payload bytes)",
             stats.received_out_of_order.packets, stats.received_out_of_order.bytes
         );
     }
@@ -99,7 +99,7 @@ pub async fn run_and_report_stats(
     });
     for (node_id, stats) in buffer_usage.into_iter().rev() {
         println!(
-            "* {node_id}: {} bytes ({} packets dropped due to buffer being full)",
+            "* {node_id}: {} payload bytes ({} packets dropped due to buffer being full)",
             stats.max_buffer_usage, stats.dropped_buffer_full.packets
         );
     }
@@ -111,7 +111,7 @@ pub async fn run_and_report_stats(
     link_stats.sort_unstable_by_key(|(id, _)| *id);
     for (link_id, stats) in link_stats {
         println!(
-            "* {link_id}: {} packets lost in transit ({} bytes)",
+            "* {link_id}: {} packets lost in transit ({} payload bytes)",
             stats.dropped_in_transit.packets, stats.dropped_in_transit.bytes
         );
     }
