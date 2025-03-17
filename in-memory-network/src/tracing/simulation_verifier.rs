@@ -618,8 +618,8 @@ mod replayed {
     pub struct ReplayedLink {
         status: UpdateLinkStatus,
         last_down_relative: Option<Duration>,
-        used_bandwidth_bps_in_current_window: usize,
-        packets_using_bandwidth: VecDeque<(Duration, usize)>,
+        used_bps_in_bandwidth_window: usize,
+        packets_in_bandwidth_window: VecDeque<(Duration, usize)>,
     }
 
     impl ReplayedLink {
@@ -641,37 +641,35 @@ mod replayed {
 
         pub fn packet_sent(
             &mut self,
-            now: Duration,
-            size_bytes: usize,
+            packet_sent_time: Duration,
+            packet_size_bytes: usize,
             link_bandwidth_bps: usize,
         ) -> usize {
-            let size_bits = size_bytes * 8;
-            self.packets_using_bandwidth.push_back((now, size_bits));
-            self.used_bandwidth_bps_in_current_window += size_bits;
-
             // 9600 is the minimum packet size, so if a link can send less than that per second, it
             // will inevitably appear here as using more bps than available. For that reason, we use
             // a longer window in that case.
             let window_seconds = if link_bandwidth_bps < 9600 { 10 } else { 1 };
 
-            loop {
-                let Some((first_send_in_window, first_size_bits)) =
-                    self.packets_using_bandwidth.front().copied()
-                else {
-                    break;
-                };
-
-                let first_is_out_of_window =
-                    now > first_send_in_window + Duration::from_secs(window_seconds);
-                if first_is_out_of_window {
-                    self.packets_using_bandwidth.pop_front();
-                    self.used_bandwidth_bps_in_current_window -= first_size_bits;
-                } else {
-                    break;
-                }
+            // Remove any packets that have fallen out of the window
+            while self
+                .packets_in_bandwidth_window
+                .front()
+                .is_some_and(|first| {
+                    first.0 + Duration::from_secs(window_seconds) < packet_sent_time
+                })
+            {
+                let (_, bits) = self.packets_in_bandwidth_window.pop_front().unwrap();
+                self.used_bps_in_bandwidth_window -= bits;
             }
 
-            self.used_bandwidth_bps_in_current_window / window_seconds as usize
+            // Add the new packet to the window
+            let packet_size_bits = packet_size_bytes * 8;
+            self.packets_in_bandwidth_window
+                .push_back((packet_sent_time, packet_size_bits));
+            self.used_bps_in_bandwidth_window += packet_size_bits;
+
+            // Smooth out the bps if necessary
+            self.used_bps_in_bandwidth_window / window_seconds as usize
         }
     }
 
@@ -680,8 +678,8 @@ mod replayed {
             Self {
                 status: UpdateLinkStatus::Up,
                 last_down_relative: None,
-                used_bandwidth_bps_in_current_window: 0,
-                packets_using_bandwidth: Default::default(),
+                used_bps_in_bandwidth_window: 0,
+                packets_in_bandwidth_window: Default::default(),
             }
         }
     }
