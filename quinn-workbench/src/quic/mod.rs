@@ -64,7 +64,7 @@ pub async fn run_and_report_stats(
         println!("* {name} ({node})");
 
         println!(
-            "  * Sent packets: {} ({} paylod bytes)",
+            "  * Sent packets: {} ({} payload bytes)",
             stats.sent.packets, stats.sent.bytes,
         );
         println!(
