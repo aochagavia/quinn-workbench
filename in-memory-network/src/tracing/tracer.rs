@@ -1,4 +1,5 @@
 use crate::InTransitData;
+use crate::async_rt::instant::Instant;
 use crate::network::event::NetworkEventPayload;
 use crate::network::link::NetworkLink;
 use crate::network::node::Node;
@@ -14,7 +15,6 @@ use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::Instant;
 
 pub struct SimulationStepTracer {
     simulation_start: Instant,

@@ -2,6 +2,10 @@ use crate::config::NetworkConfig;
 use crate::config::cli::{CliOpt, ThroughputOpt};
 use anyhow::Context as _;
 use fastrand::Rng;
+use futures::{FutureExt, select_biased};
+use in_memory_network::async_rt;
+use in_memory_network::async_rt::cancellation::CancellationToken;
+use in_memory_network::async_rt::instant::Instant;
 use in_memory_network::network::InMemoryNetwork;
 use in_memory_network::network::event::NetworkEvents;
 use in_memory_network::network::spec::NetworkSpec;
@@ -15,8 +19,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{cmp, fs};
-use tokio::time::Instant;
-use tokio_util::sync::CancellationToken;
 
 pub async fn run(
     cli_opt: &CliOpt,
@@ -67,18 +69,18 @@ pub async fn run(
     let client_node = network.host(client_ip);
     let client_socket = Arc::pin(network.udp_socket_for_node(client_node.clone()));
 
-    let cancellation_token = CancellationToken::new();
+    let (cancellation_token, cancellation_signal) = CancellationToken::new();
 
     // Destination
     let cancellation_token_cp = cancellation_token.clone();
-    let server_task = tokio::spawn(async move {
+    let server_task = async_rt::spawn(async move {
         let mut arrived_packets: Vec<(Duration, usize)> = Vec::new();
         let mut bufs_and_meta = BufsAndMeta::new(1200, 20);
 
         loop {
-            let packets = tokio::select! {
-                _ = cancellation_token_cp.cancelled() => { break },
-                packets = server_socket.receive(&mut bufs_and_meta) => packets.unwrap()
+            let packets = select_biased! {
+                packets = server_socket.receive(&mut bufs_and_meta).fuse() => packets.unwrap(),
+                _ = cancellation_token_cp.cancelled().fuse() => { break },
             };
 
             // Receive next transmits
@@ -105,13 +107,12 @@ pub async fn run(
 
     println!("Sending at {send_bps} bps");
 
-    let cancellation_token_cp = cancellation_token.clone();
     let client_socket_cp = client_socket.clone();
-    tokio::spawn(async move {
+    async_rt::spawn(async move {
         let max_bytes_per_send = 1200;
         let payload = vec![0; max_bytes_per_send];
         loop {
-            if cancellation_token_cp.is_cancelled() {
+            if cancellation_token.is_cancelled() {
                 break;
             }
 
@@ -134,12 +135,12 @@ pub async fn run(
             }
 
             // Sleep before sending the next packet
-            tokio::time::sleep(Duration::from_millis(send_interval_ms)).await;
+            async_rt::sleep(Duration::from_millis(send_interval_ms)).await;
         }
     });
 
     // Wait till done
-    tokio::time::sleep(duration).await;
+    async_rt::sleep(duration).await;
     println!("{:.2}s Done", simulation_start.elapsed().as_secs_f64());
 
     println!("--- Replay log ---");
@@ -149,7 +150,7 @@ pub async fn run(
     println!("* Replay log available at {replay_log_path}");
 
     println!("--- Throughput ---");
-    cancellation_token.cancel();
+    cancellation_signal.cancel();
     let packets = server_task.await.unwrap();
 
     let mut window: VecDeque<(Duration, usize)> = VecDeque::new();

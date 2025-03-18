@@ -1,5 +1,6 @@
 #![allow(clippy::type_complexity)]
 
+pub mod async_rt;
 pub mod network;
 pub mod pcap_exporter;
 pub mod quinn_interop;
@@ -26,6 +27,7 @@ pub struct InTransitData {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::async_rt::instant::Instant;
     use crate::network::InMemoryNetwork;
     use crate::network::event::{
         NetworkEvent, NetworkEventPayload, NetworkEvents, UpdateLinkStatus,
@@ -43,11 +45,10 @@ mod test {
     use quinn::crypto::rustls::QuicClientConfig;
     use quinn::rustls::RootCertStore;
     use quinn::rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
-    use quinn::{ClientConfig, Endpoint, EndpointConfig, ServerConfig, rustls};
+    use quinn::{ClientConfig, Endpoint, EndpointConfig, Runtime, ServerConfig, rustls};
     use std::net::Ipv4Addr;
     use std::sync::Arc;
     use std::time::Duration;
-    use tokio::time::Instant;
 
     const SERVER_ADDR: Ipv4Cidr = Ipv4Cidr::from_ipv4(Ipv4Addr::new(88, 88, 88, 88), 24);
     const ROUTER1_ADDR: Ipv4Cidr = Ipv4Cidr::from_ipv4(Ipv4Addr::new(200, 200, 200, 1), 24);
@@ -223,6 +224,10 @@ mod test {
         .unwrap()
     }
 
+    fn default_runtime() -> Arc<dyn Runtime> {
+        Arc::new(async_rt::Rt::active())
+    }
+
     fn default_server_config() -> (&'static str, CertificateDer<'static>, ServerConfig) {
         let server_name = "server-name";
         let cert = rcgen::generate_simple_self_signed(vec![server_name.into()]).unwrap();
@@ -252,9 +257,9 @@ mod test {
         ClientConfig::new(Arc::new(QuicClientConfig::try_from(crypto).unwrap()))
     }
 
-    #[tokio::test(start_paused = true)]
+    #[macros::async_test_priv]
     async fn test_quic_handshake_and_bidi_stream_works() {
-        let rt = quinn::default_runtime().unwrap();
+        let rt = default_runtime();
 
         // Network
         let network = default_network().call();
@@ -283,7 +288,7 @@ mod test {
         client_endpoint.set_default_client_config(client_config);
 
         // Run server in the background
-        let server_handle = tokio::spawn(async move {
+        let server_handle = async_rt::spawn(async move {
             let conn = server_endpoint.accept().await.unwrap().await.unwrap();
             let (mut bi_tx, mut bi_rx) = conn.accept_bi().await.unwrap();
 
@@ -312,7 +317,7 @@ mod test {
         server_handle.await.unwrap();
     }
 
-    #[tokio::test(start_paused = true)]
+    #[macros::async_test_priv]
     async fn test_packet_arrives_at_expected_time() {
         // Sanity check
         let network = default_network().call();
@@ -367,7 +372,7 @@ mod test {
         }
     }
 
-    #[tokio::test(start_paused = true)]
+    #[macros::async_test_priv]
     async fn test_packet_is_delayed_by_buffering() {
         let bandwidths_and_delays = [
             (BANDWIDTH_100_MBPS, Duration::from_millis(0)),
@@ -430,7 +435,7 @@ mod test {
         }
     }
 
-    #[tokio::test(start_paused = true)]
+    #[macros::async_test_priv]
     async fn test_packet_is_buffered_when_link_down() {
         // Let one of the links be down for 10 seconds
         let network = default_network()

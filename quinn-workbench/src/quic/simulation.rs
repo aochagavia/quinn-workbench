@@ -3,7 +3,11 @@ use crate::config::cli::{CliOpt, QuicOpt};
 use crate::config::quinn::QuinnJsonConfig;
 use crate::quic::{client, server};
 use anyhow::{Context, bail};
+use async_lock::Semaphore;
 use fastrand::Rng;
+use futures::StreamExt;
+use in_memory_network::async_rt;
+use in_memory_network::async_rt::instant::Instant;
 use in_memory_network::network::InMemoryNetwork;
 use in_memory_network::network::event::NetworkEvents;
 use in_memory_network::network::spec::NetworkSpec;
@@ -14,8 +18,6 @@ use quinn_proto::VarInt;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Semaphore;
-use tokio::time::Instant;
 
 #[derive(Default)]
 pub struct QuicSimulation {
@@ -164,8 +166,8 @@ impl QuicSimulation {
             let connection_name = (i + b'A') as char;
             let connections_semaphore = connections_semaphore.clone();
             let concurrent_streams = quic_options.concurrent_streams_per_connection;
-            connection_tasks.push(tokio::spawn(async move {
-                let _permit = connections_semaphore.acquire().await.unwrap();
+            connection_tasks.push(async_rt::spawn(async move {
+                let _permit = connections_semaphore.acquire().await;
                 client::run_connection(
                     client,
                     server_name,
@@ -179,7 +181,7 @@ impl QuicSimulation {
             }));
 
             // Wait 1 ms before starting the next connection
-            tokio::time::sleep(Duration::from_millis(1)).await;
+            async_rt::sleep(Duration::from_millis(1)).await;
         }
 
         drop(client);
@@ -197,7 +199,7 @@ impl QuicSimulation {
 
         // Cleanly shut down the server
         let mut handled_connections = 0;
-        while let Some(conn_task_handle) = server_handled_connections.recv().await {
+        while let Some(conn_task_handle) = server_handled_connections.next().await {
             conn_task_handle
                 .await
                 .context("server connection task crashed")?

@@ -1,12 +1,13 @@
 use crate::config::quinn::QuinnJsonConfig;
 use anyhow::Context;
 use fastrand::Rng;
+use futures::channel::mpsc::UnboundedReceiver;
+use in_memory_network::async_rt;
+use in_memory_network::async_rt::{JoinHandle, Rt};
 use in_memory_network::quinn_interop::InMemoryUdpSocket;
 use quinn::Endpoint;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::sync::Arc;
-use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::task::JoinHandle;
 
 pub static _CERT_DER_ECDSA: &[u8] = &[
     0x30, 0x82, 0x1, 0x60, 0x30, 0x82, 0x1, 0x6, 0xa0, 0x3, 0x2, 0x1, 0x2, 0x2, 0x14, 0x1f, 0xa0,
@@ -180,9 +181,9 @@ pub fn server_listen(
     endpoint: Endpoint,
     response_payload_size: usize,
 ) -> UnboundedReceiver<JoinHandle<anyhow::Result<()>>> {
-    let (connection_result_tx, connection_result_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (connection_result_tx, connection_result_rx) = futures::channel::mpsc::unbounded();
 
-    tokio::spawn(async move {
+    async_rt::spawn(async move {
         let response: Vec<_> = "Lorem ipsum "
             .bytes()
             .cycle()
@@ -192,13 +193,13 @@ pub fn server_listen(
 
         while let Some(incoming) = endpoint.accept().await {
             let response = response.clone();
-            let task = tokio::spawn(async move {
+            let task = async_rt::spawn(async move {
                 let conn = incoming.await?;
 
                 let mut stream_tasks = Vec::new();
                 while let Ok((mut tx, mut rx)) = conn.accept_bi().await {
                     let response = response.clone();
-                    let stream_task = tokio::spawn(async move {
+                    let stream_task = async_rt::spawn(async move {
                         // Read the request
                         let request = rx.read_to_end(usize::MAX).await?;
                         assert_eq!(request, b"GET /index.html");
@@ -224,7 +225,7 @@ pub fn server_listen(
             });
 
             // Notify observers that we are done handling the connection
-            connection_result_tx.send(task).unwrap();
+            connection_result_tx.unbounded_send(task).unwrap();
         }
     });
 
@@ -247,7 +248,7 @@ pub fn server_endpoint(
         crate::quic::endpoint_config(seed),
         Some(server_config),
         Arc::new(server_socket),
-        quinn::default_runtime().unwrap(),
+        Arc::new(Rt::active()),
     )
     .context("failed to create server endpoint")
 }

@@ -11,7 +11,7 @@ mod outbound_buffer;
 pub mod route;
 pub mod spec;
 
-use crate::InTransitData;
+use crate::async_rt::instant::Instant;
 use crate::network::event::{NetworkEventPayload, NetworkEvents};
 use crate::network::inbound_queue::InboundQueue;
 use crate::network::node::Node;
@@ -19,8 +19,10 @@ use crate::network::spec::{NetworkSpec, NodeKind};
 use crate::quinn_interop::InMemoryUdpSocket;
 use crate::tracing::tracer::SimulationStepTracer;
 use crate::transmit::OwnedTransmit;
+use crate::{InTransitData, async_rt};
 use anyhow::{anyhow, bail};
 use fastrand::Rng;
+use futures::StreamExt;
 use link::NetworkLink;
 use parking_lot::Mutex;
 use quinn::udp::EcnCodepoint;
@@ -31,7 +33,6 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::time::Instant;
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
@@ -185,10 +186,10 @@ impl InMemoryNetwork {
 
         // Process events in the background
         let network_clone = Arc::downgrade(&network);
-        tokio::spawn(async move {
+        async_rt::spawn(async move {
             for event in events.sorted_events.into_iter() {
                 // Wait until next event should run
-                tokio::time::sleep_until(start + event.relative_time).await;
+                async_rt::sleep_until(start + event.relative_time).await;
 
                 if let Some(network) = network_clone.upgrade() {
                     network.process_event(event.payload);
@@ -319,12 +320,12 @@ impl InMemoryNetwork {
         let timeout = Duration::from_secs(3600 * 24 * days);
 
         // Ensure the packets arrived at each host
-        let a_to_b = tokio::time::timeout(
+        let a_to_b = async_rt::timeout(
             timeout,
             InboundQueue::receive(host_b.udp_endpoint.as_ref().unwrap().inbound.clone(), 1),
         )
         .await;
-        let b_to_a = tokio::time::timeout(
+        let b_to_a = async_rt::timeout(
             timeout,
             InboundQueue::receive(host_a.udp_endpoint.as_ref().unwrap().inbound.clone(), 1),
         )
@@ -492,21 +493,21 @@ fn spawn_node_buffer_processors(
     network: Arc<InMemoryNetwork>,
     nodes: Vec<(
         Arc<Node>,
-        tokio::sync::mpsc::UnboundedReceiver<InTransitData>,
+        futures::channel::mpsc::UnboundedReceiver<InTransitData>,
     )>,
 ) {
     for (node, outbound_rx) in nodes {
         let network = network.clone();
-        tokio::spawn(async move { process_buffer_for_node(network, node, outbound_rx).await });
+        async_rt::spawn(async move { process_buffer_for_node(network, node, outbound_rx).await });
     }
 }
 
 async fn process_buffer_for_node(
     network: Arc<InMemoryNetwork>,
     node: Arc<Node>,
-    mut outbound_rx: tokio::sync::mpsc::UnboundedReceiver<InTransitData>,
+    mut outbound_rx: futures::channel::mpsc::UnboundedReceiver<InTransitData>,
 ) {
-    while let Some(mut data) = outbound_rx.recv().await {
+    while let Some(mut data) = outbound_rx.next().await {
         let link = match network.resolve_link(&node, &data) {
             Ok(link) => link,
             Err(true) => {
@@ -562,7 +563,7 @@ fn spawn_packet_forwarders(network: Arc<InMemoryNetwork>) {
     for link in network.links_by_id.values() {
         let network = network.clone();
         let link = link.clone();
-        tokio::spawn(forward_packets_for_link(network, link));
+        async_rt::spawn(forward_packets_for_link(network, link));
     }
 }
 

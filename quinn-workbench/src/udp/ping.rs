@@ -2,6 +2,8 @@ use crate::config::NetworkConfig;
 use crate::config::cli::{CliOpt, PingOpt};
 use anyhow::Context as _;
 use fastrand::Rng;
+use in_memory_network::async_rt;
+use in_memory_network::async_rt::instant::Instant;
 use in_memory_network::network::InMemoryNetwork;
 use in_memory_network::network::event::NetworkEvents;
 use in_memory_network::network::spec::NetworkSpec;
@@ -16,7 +18,6 @@ use std::fs;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::Instant;
 
 pub async fn run(
     cli_opt: &CliOpt,
@@ -71,7 +72,7 @@ pub async fn run(
 
     // Server
     let server_socket_cp = server_socket.clone();
-    tokio::spawn(async move {
+    async_rt::spawn(async move {
         let mut bufs_and_meta = BufsAndMeta::new(1200, 5);
 
         loop {
@@ -101,7 +102,7 @@ pub async fn run(
     let client_socket_cp = client_socket.clone();
     let in_flight_cp = in_flight.clone();
     let lost_cp = lost.clone();
-    tokio::spawn(async move {
+    async_rt::spawn(async move {
         let mut ping_nr: u64 = 0;
         loop {
             // Send ping
@@ -123,8 +124,8 @@ pub async fn run(
             // Track pings as lost after the deadline has passed
             let in_flight_cp = in_flight_cp.clone();
             let lost_cp = lost_cp.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(deadline).await;
+            async_rt::spawn(async move {
+                async_rt::sleep(deadline).await;
                 if let Some(ping_sent) = in_flight_cp.lock().remove(&ping_nr) {
                     lost_cp.lock().push(ping_nr);
                     let ping_lost = Instant::now();
@@ -138,12 +139,12 @@ pub async fn run(
             });
 
             // Sleep before sending the next ping
-            tokio::time::sleep(interval).await;
+            async_rt::sleep(interval).await;
         }
     });
 
     // Receiver
-    tokio::spawn(async move {
+    async_rt::spawn(async move {
         let mut bufs_and_meta = BufsAndMeta::new(1200, 5);
 
         loop {
@@ -167,7 +168,7 @@ pub async fn run(
     });
 
     // Wait till done
-    tokio::time::sleep(duration).await;
+    async_rt::sleep(duration).await;
     println!("{:.2}s Done", simulation_start.elapsed().as_secs_f64());
 
     println!("--- Replay log ---");

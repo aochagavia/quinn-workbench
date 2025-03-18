@@ -1,4 +1,5 @@
 use crate::InTransitData;
+use crate::async_rt::instant::Instant;
 use anyhow::Context;
 use parking_lot::Mutex;
 use pcap_file::pcapng::PcapNgWriter;
@@ -15,7 +16,6 @@ use std::io::{BufWriter, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::time::Instant;
 
 pub struct PcapExporter {
     capture_start: Instant,

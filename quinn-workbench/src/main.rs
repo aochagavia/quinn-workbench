@@ -9,6 +9,7 @@ use crate::udp::{ping, throughput};
 use anyhow::Context;
 use clap::Parser;
 use config::cli::CliOpt;
+use in_memory_network::async_rt;
 use in_memory_network::pcap_exporter::PcapExporter;
 use serde::de::DeserializeOwned;
 use std::fs::File;
@@ -29,35 +30,32 @@ fn main() -> anyhow::Result<()> {
     let opt = CliOpt::parse();
     let network_config = load_network_config(&opt)?;
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .start_paused(true)
-        .build()
-        .expect("failed to initialize tokio");
+    let rt = async_rt::Rt::new();
+    rt.block_on(async move {
+        match &opt.command {
+            Command::Quic(quic_opt) => {
+                let quinn = load_json(&quic_opt.quinn_config)?;
+                let pcap_file =
+                    File::create("capture.pcap").context("failed to open capture.pcap for writing")?;
+                let pcap_exporter = Arc::new(PcapExporter::new(pcap_file));
+                let result = quic::run_and_report_stats(
+                    &opt,
+                    quic_opt,
+                    network_config,
+                    quinn,
+                    pcap_exporter.clone(),
+                ).await;
 
-    match &opt.command {
-        Command::Quic(quic_opt) => {
-            let quinn = load_json(&quic_opt.quinn_config)?;
-            let pcap_file =
-                File::create("capture.pcap").context("failed to open capture.pcap for writing")?;
-            let pcap_exporter = Arc::new(PcapExporter::new(pcap_file));
-            let result = rt.block_on(quic::run_and_report_stats(
-                &opt,
-                quic_opt,
-                network_config,
-                quinn,
-                pcap_exporter.clone(),
-            ));
-
-            // Ensure the pcap export is written to disk
-            pcap_exporter.flush()?;
-            result
+                // Ensure the pcap export is written to disk
+                pcap_exporter.flush()?;
+                result
+            }
+            Command::Ping(ping_opt) => ping::run(&opt, ping_opt, network_config).await,
+            Command::Throughput(throughput_opt) => {
+                throughput::run(&opt, throughput_opt, network_config).await
+            }
         }
-        Command::Ping(ping_opt) => rt.block_on(ping::run(&opt, ping_opt, network_config)),
-        Command::Throughput(throughput_opt) => {
-            rt.block_on(throughput::run(&opt, throughput_opt, network_config))
-        }
-    }
+    })
 }
 
 fn load_network_config(cli: &CliOpt) -> anyhow::Result<NetworkConfig> {

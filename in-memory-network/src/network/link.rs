@@ -1,22 +1,21 @@
-use crate::InTransitData;
+use crate::async_rt::JoinHandle;
+use crate::async_rt::cancellation::CancellationToken;
+use crate::async_rt::instant::Instant;
+use crate::async_rt::notify::Notify;
 use crate::network::event::UpdateLinkStatus;
 use crate::network::inbound_queue::{InboundQueue, NextPacketDelivery};
 use crate::network::node::Node;
 use crate::network::spec::NetworkLinkSpec;
 use crate::tracing::tracer::SimulationStepTracer;
 use crate::transmit::{IPV4_OVERHEAD, UDP_OVERHEAD};
-use futures_util::FutureExt;
-use futures_util::future::Shared;
+use crate::{InTransitData, async_rt};
+use futures::future::Shared;
+use futures::{FutureExt, select_biased};
 use parking_lot::Mutex;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{cmp, mem};
-use tokio::select;
-use tokio::sync::Notify;
-use tokio::task::JoinHandle;
-use tokio::time::Instant;
-use tokio_util::sync::CancellationToken;
 
 pub struct NetworkLink {
     pub id: Arc<str>,
@@ -37,14 +36,14 @@ pub struct NetworkLink {
 pub(crate) enum LinkStatus {
     Up,
     Down {
-        up_tx: tokio::sync::oneshot::Sender<()>,
-        up_rx: Shared<tokio::sync::oneshot::Receiver<()>>,
+        up_tx: futures::channel::oneshot::Sender<()>,
+        up_rx: Shared<futures::channel::oneshot::Receiver<()>>,
     },
 }
 
 impl LinkStatus {
     pub(crate) fn new_down() -> Self {
-        let (up_tx, up_rx) = tokio::sync::oneshot::channel();
+        let (up_tx, up_rx) = futures::channel::oneshot::channel();
         LinkStatus::Down {
             up_tx,
             up_rx: up_rx.shared(),
@@ -58,7 +57,7 @@ impl LinkStatus {
         }
     }
 
-    fn notifier_for_link_up(&self) -> Option<Shared<tokio::sync::oneshot::Receiver<()>>> {
+    fn notifier_for_link_up(&self) -> Option<Shared<futures::channel::oneshot::Receiver<()>>> {
         match self {
             LinkStatus::Up => None,
             LinkStatus::Down { up_rx, .. } => Some(up_rx.clone()),
@@ -146,17 +145,17 @@ impl NetworkLink {
         this: Arc<Mutex<Self>>,
         data: &InTransitData,
         cancellation_token: CancellationToken,
-    ) -> tokio::sync::oneshot::Receiver<Arc<Mutex<Self>>> {
+    ) -> futures::channel::oneshot::Receiver<Arc<Mutex<Self>>> {
         assert!(
             !this.lock().has_bandwidth_available(data),
             "we should only wait when no bandwidth is available"
         );
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = futures::channel::oneshot::channel();
         let existing_task = this.lock().packets_waiting_for_bandwidth_task.take();
         let this_cp = this.clone();
         let data_len = data.transmit.packet_size();
-        let new_task = tokio::spawn(async move {
+        let new_task = async_rt::spawn(async move {
             if let Some(task) = existing_task {
                 // Wait for the previous packets in the queue to be done
                 let result = task.await;
@@ -171,9 +170,9 @@ impl NetworkLink {
                 .duration_until_enough_bandwidth(data_len);
 
             // Sleep until enough bandwidth or until cancelled, whichever comes first
-            select! {
-                _ = cancellation_token.cancelled() => {}
-                _ = tokio::time::sleep(duration_until_enough_bandwidth) => {}
+            select_biased! {
+                _ = cancellation_token.cancelled().fuse() => {}
+                _ = async_rt::sleep(duration_until_enough_bandwidth).fuse() => {}
             }
 
             // Concurrency: keep the one-liner to shorten the lock on `this`
@@ -255,13 +254,17 @@ impl DataRateCalculator {
         }
 
         let seconds_since_last_increase = (now - self.last_increase).as_secs_f64();
+
+        // println!("seconds since last increase: {seconds_since_last_increase:.6}");
+
         let available_bits_since_last_increase = (self.bandwidth_bps * seconds_since_last_increase)
             .ceil()
             .clamp(0.0, usize::MAX as f64)
             as usize;
 
-        // Cap the available bandwidth (otherwise it will build up in periods of inactivity and
-        // tend to infinity)
+        // println!("available since last increase: {available_bits_since_last_increase}");
+
+        // Cap the available bandwidth (otherwise it will build up to infinity)
         self.available_bandwidth_bits = self
             .available_bandwidth_bits
             .saturating_add(available_bits_since_last_increase)
@@ -282,7 +285,7 @@ impl DataRateCalculator {
 mod test {
     use super::*;
 
-    #[tokio::test(start_paused = true)]
+    #[macros::async_test_priv]
     async fn test_drc_send_until_not_enough_bandwidth() {
         let mut drc = DataRateCalculator::new(10_000_000);
 
@@ -297,7 +300,7 @@ mod test {
         assert!(!drc.has_bandwidth_available(Instant::now(), 1200));
     }
 
-    #[tokio::test(start_paused = true)]
+    #[macros::async_test_priv]
     async fn test_drc_bandwidth_regen() {
         let mut drc = DataRateCalculator::new(10_000_000);
 
@@ -308,9 +311,24 @@ mod test {
         assert_eq!(drc.available_bandwidth_bits, 1600);
         assert!(!drc.has_bandwidth_available(Instant::now(), 1200));
 
-        // Bandwidth regen happens at the expected rate
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        // Bandwidth regen happens at the expected rate for "big" intervals
+        async_rt::sleep(Duration::from_millis(10)).await;
         assert!(drc.has_bandwidth_available(Instant::now(), 1200));
         assert_eq!(drc.available_bandwidth_bits, 1600 + 100_000);
+    }
+
+    #[macros::async_test_priv]
+    async fn test_drc_bandwidth_regen_sub_millisecond() {
+        let mut drc = DataRateCalculator::new(10_000_000);
+        drc.available_bandwidth_bits = 0;
+
+        async_rt::sleep(Duration::from_millis(1)).await;
+        drc.has_bandwidth_available(Instant::now(), 1200);
+        assert_eq!(drc.available_bandwidth_bits, 10_000);
+
+        // 1 ms = 1000 µs = 1000000 ns
+        async_rt::sleep(Duration::from_micros(2001)).await;
+        drc.has_bandwidth_available(Instant::now(), 1200);
+        assert_eq!(drc.available_bandwidth_bits, 30_010);
     }
 }

@@ -1,3 +1,4 @@
+use crate::async_rt::cancellation::CancellationToken;
 use crate::network::InMemoryNetwork;
 use crate::network::inbound_queue::InboundQueue;
 use crate::network::link::NetworkLink;
@@ -9,7 +10,6 @@ use parking_lot::Mutex;
 use std::net::{IpAddr, SocketAddr};
 use std::ops::ControlFlow;
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
 
 pub struct Node {
     pub(crate) addresses: Vec<IpAddr>,
@@ -17,7 +17,7 @@ pub struct Node {
     pub(crate) udp_endpoint: Option<Arc<UdpEndpoint>>,
     pub(crate) injected_failures: NodeInjectedFailures,
     outbound_buffer: Arc<OutboundBuffer>,
-    outbound_tx: tokio::sync::mpsc::UnboundedSender<InTransitData>,
+    outbound_tx: futures::channel::mpsc::UnboundedSender<InTransitData>,
 }
 
 impl Node {
@@ -26,7 +26,7 @@ impl Node {
     ) -> anyhow::Result<(
         Self,
         Arc<UdpEndpoint>,
-        tokio::sync::mpsc::UnboundedReceiver<InTransitData>,
+        futures::channel::mpsc::UnboundedReceiver<InTransitData>,
     )> {
         if node.kind != NodeKind::Host {
             bail!(
@@ -48,7 +48,7 @@ impl Node {
             inbound: Arc::new(Mutex::new(InboundQueue::new())),
         });
 
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, rx) = futures::channel::mpsc::unbounded();
         let host = Self {
             injected_failures: NodeInjectedFailures::from_spec(&node),
             id: node.id.into(),
@@ -62,13 +62,16 @@ impl Node {
 
     pub(crate) fn router(
         node: NetworkNodeSpec,
-    ) -> anyhow::Result<(Self, tokio::sync::mpsc::UnboundedReceiver<InTransitData>)> {
+    ) -> anyhow::Result<(
+        Self,
+        futures::channel::mpsc::UnboundedReceiver<InTransitData>,
+    )> {
         let addresses = node.addresses();
         if addresses.is_empty() {
             bail!("found router with no addresses: {}", node.id);
         }
 
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, rx) = futures::channel::mpsc::unbounded();
         let node = Node {
             injected_failures: NodeInjectedFailures::from_spec(&node),
             id: node.id.into(),
@@ -86,7 +89,7 @@ impl Node {
         network: &Arc<InMemoryNetwork>,
         data: &InTransitData,
     ) -> Arc<Mutex<NetworkLink>> {
-        let cancellation_token = CancellationToken::new();
+        let (cancellation_token, cancellation_signal) = CancellationToken::new();
         let mut futures = Vec::new();
         network.walk_links::<()>(self, data.transmit.destination.ip(), |link| {
             futures.push(NetworkLink::sleep_until_ready_to_send(
@@ -97,10 +100,10 @@ impl Node {
             ControlFlow::Continue(())
         });
 
-        let link = futures_util::future::select_all(futures).await.0.unwrap();
+        let link = futures::future::select_all(futures).await.0.unwrap();
 
         // Ensure the other links stop waiting for this packet to be sendable
-        cancellation_token.cancel();
+        cancellation_signal.cancel();
 
         link
     }
@@ -112,7 +115,7 @@ impl Node {
 
         if outbound_buffer.reserve(data_len) {
             // The buffer has capacity!
-            self.outbound_tx.send(data).unwrap();
+            self.outbound_tx.unbounded_send(data).unwrap();
         } else {
             // The buffer is full and the packet is being dropped
             network.tracer.track_dropped_from_buffer(&data, self);
