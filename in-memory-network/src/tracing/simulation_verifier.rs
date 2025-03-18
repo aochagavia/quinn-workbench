@@ -645,10 +645,10 @@ mod replayed {
             packet_size_bytes: usize,
             link_bandwidth_bps: usize,
         ) -> usize {
-            // 9600 is the minimum packet size, so if a link can send less than that per second, it
-            // will inevitably appear here as using more bps than available. For that reason, we use
-            // a longer window in that case.
-            let window_seconds = if link_bandwidth_bps < 9600 { 10 } else { 1 };
+            // 9984 is the MTU (if you consider IPv6 and UDP headers), so if a link can send less
+            // than that per second, it will inevitably appear here as using more bps than
+            // available. For that reason, we use a longer window in that case.
+            let window_seconds = if link_bandwidth_bps < 9984 { 10 } else { 1 };
 
             // Remove any packets that have fallen out of the window
             while self
