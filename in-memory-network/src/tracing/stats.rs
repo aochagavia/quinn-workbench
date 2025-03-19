@@ -1,6 +1,7 @@
 #[derive(Default)]
 pub struct LinkStats {
     pub dropped_in_transit: PacketStats,
+    pub max_used_bandwidth_bps: usize,
 }
 
 #[derive(Default)]

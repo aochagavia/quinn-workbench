@@ -28,6 +28,7 @@ pub struct NetworkLink {
     status: LinkStatus,
     last_down: Option<Instant>,
     delay: Duration,
+    pub(crate) bandwidth_bps: usize,
     pub(crate) notify_packet_sent: Arc<Notify>,
     pub(crate) congestion_event_ratio: f64,
     pub(crate) extra_delay: Duration,
@@ -78,6 +79,7 @@ impl NetworkLink {
             rate_calculator: DataRateCalculator::new(l.bandwidth_bps),
             packets_waiting_for_bandwidth_task: None,
             delay: l.delay,
+            bandwidth_bps: l.bandwidth_bps as usize,
             notify_packet_sent: Arc::new(Notify::new()),
             congestion_event_ratio: l.congestion_event_ratio,
             extra_delay: l.extra_delay,
@@ -85,7 +87,7 @@ impl NetworkLink {
         }
     }
 
-    pub fn was_down_after(&self, instant: Instant) -> bool {
+    pub(crate) fn was_down_after(&self, instant: Instant) -> bool {
         matches!(self.last_down, Some(down) if down > instant)
     }
 

@@ -1,5 +1,6 @@
 use crate::config::NetworkConfig;
 use crate::config::cli::{CliOpt, ThroughputOpt};
+use crate::util::{print_link_stats, print_max_buffer_usage_per_node, print_node_stats};
 use anyhow::Context as _;
 use fastrand::Rng;
 use in_memory_network::network::InMemoryNetwork;
@@ -20,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 
 pub async fn run(
     cli_opt: &CliOpt,
-    ping_opt: &ThroughputOpt,
+    throughput_opt: &ThroughputOpt,
     network_config: NetworkConfig,
 ) -> anyhow::Result<()> {
     let simulation_start = Instant::now();
@@ -57,7 +58,7 @@ pub async fn run(
     }
 
     println!("--- Throughput test ---");
-    let duration = Duration::from_millis(ping_opt.duration_ms);
+    let duration = Duration::from_millis(throughput_opt.duration_ms);
 
     let server_ip = cli_opt.server_ip_address;
     let server_node = network.host(server_ip);
@@ -98,7 +99,7 @@ pub async fn run(
         .map(|l| l.bandwidth_bps)
         .max()
         .unwrap();
-    let send_bps = ping_opt.send_bps.unwrap_or(2 * max_link_bps);
+    let send_bps = throughput_opt.send_bps.unwrap_or(2 * max_link_bps);
     let send_bytes_per_second = send_bps / 8;
     let send_interval_ms = 50;
     let send_bytes_per_interval = send_bytes_per_second / (1000 / send_interval_ms);
@@ -108,17 +109,17 @@ pub async fn run(
     let cancellation_token_cp = cancellation_token.clone();
     let client_socket_cp = client_socket.clone();
     tokio::spawn(async move {
-        let max_bytes_per_send = 1200;
-        let payload = vec![0; max_bytes_per_send];
+        let max_bytes_per_transmit = 1200;
+        let payload = vec![0; max_bytes_per_transmit];
         loop {
             if cancellation_token_cp.is_cancelled() {
                 break;
             }
 
-            // Each iteration is a new send interval
+            // Each iteration happens after an interval elapses
             let mut bytes_left = send_bytes_per_interval as usize;
             while bytes_left > 0 {
-                let next_packet_size_bytes = cmp::min(max_bytes_per_send, bytes_left);
+                let next_packet_size_bytes = cmp::min(max_bytes_per_transmit, bytes_left);
                 bytes_left -= next_packet_size_bytes;
 
                 // Send packet
@@ -178,7 +179,6 @@ pub async fn run(
         );
     }
 
-    println!("--- Node stats ---");
     let verified_simulation = tracer
         .verifier()
         .context("failed to create simulation verifier")?
@@ -186,68 +186,10 @@ pub async fn run(
         .context("failed to verify simulation")?;
     let server_node = network.host(cli_opt.server_ip_address);
     let client_node = network.host(cli_opt.client_ip_address);
-    for node in ["client", "server"] {
-        let name = match node {
-            "server" => server_node.id().clone(),
-            "client" => client_node.id().clone(),
-            _ => unreachable!(),
-        };
-        let stats = &verified_simulation.stats.stats_by_node[&name];
 
-        println!("* {name} ({node})");
-
-        println!(
-            "  * Sent packets: {} ({} bytes)",
-            stats.sent.packets, stats.sent.bytes,
-        );
-        println!(
-            "    | {} packets duplicated in transit ({} bytes)",
-            stats.duplicates.packets, stats.duplicates.bytes
-        );
-        println!(
-            "    | {} packets marked with the CE ECN codepoint in transit ({} bytes)",
-            stats.congestion_experienced.packets, stats.congestion_experienced.bytes
-        );
-        println!(
-            "    | {} packets dropped in transit ({} bytes)",
-            stats.dropped_injected.packets + stats.dropped_buffer_full.packets,
-            stats.dropped_injected.bytes + stats.dropped_buffer_full.bytes
-        );
-        println!(
-            "  * Received packets: {} ({} bytes)",
-            stats.received.packets, stats.received.bytes
-        );
-        println!(
-            "    | {} packets received out of order ({} bytes)",
-            stats.received_out_of_order.packets, stats.received_out_of_order.bytes
-        );
-    }
-
-    println!("--- Max buffer usage per node ---");
-    let mut buffer_usage: Vec<_> = verified_simulation.stats.stats_by_node.iter().collect();
-    buffer_usage.sort_unstable_by(|t1, t2| {
-        t1.1.max_buffer_usage
-            .cmp(&t2.1.max_buffer_usage)
-            .then(t2.0.cmp(t1.0))
-    });
-    for (node_id, stats) in buffer_usage.into_iter().rev() {
-        println!(
-            "* {node_id}: {} bytes ({} packets dropped due to buffer being full)",
-            stats.max_buffer_usage, stats.dropped_buffer_full.packets
-        );
-    }
-
-    if !verified_simulation.stats.stats_by_link.is_empty() {
-        println!("--- Link stats ---");
-    }
-    let mut link_stats: Vec<_> = verified_simulation.stats.stats_by_link.iter().collect();
-    link_stats.sort_unstable_by_key(|(id, _)| *id);
-    for (link_id, stats) in link_stats {
-        println!(
-            "* {link_id}: {} packets lost in transit ({} bytes)",
-            stats.dropped_in_transit.packets, stats.dropped_in_transit.bytes
-        );
-    }
+    print_node_stats(&verified_simulation, server_node, client_node);
+    print_max_buffer_usage_per_node(&verified_simulation);
+    print_link_stats(&verified_simulation, &network);
 
     const DISPLAY_MAX_ERRORS: usize = 10;
     if !verified_simulation.non_fatal_errors.is_empty() {

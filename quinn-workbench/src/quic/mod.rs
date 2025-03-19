@@ -4,6 +4,7 @@ use crate::config::quinn::QuinnJsonConfig;
 use crate::quic::simulation::QuicSimulation;
 use crate::quinn_extensions::ecn_cc::EcnCcFactory;
 use crate::quinn_extensions::no_cc::NoCCConfig;
+use crate::util::{print_link_stats, print_max_buffer_usage_per_node, print_node_stats};
 use anyhow::Context;
 use in_memory_network::pcap_exporter::PcapExporter;
 use quinn_proto::congestion::NewRenoConfig;
@@ -53,68 +54,9 @@ pub async fn run_and_report_stats(
         .context("failed to verify simulation")?;
     let server_node = network.host(options.server_ip_address);
     let client_node = network.host(options.client_ip_address);
-    for node in ["client", "server"] {
-        let name = match node {
-            "server" => server_node.id().clone(),
-            "client" => client_node.id().clone(),
-            _ => unreachable!(),
-        };
-        let stats = &verified_simulation.stats.stats_by_node[&name];
-
-        println!("* {name} ({node})");
-
-        println!(
-            "  * Sent packets: {} ({} bytes)",
-            stats.sent.packets, stats.sent.bytes,
-        );
-        println!(
-            "    | {} packets duplicated in transit ({} bytes)",
-            stats.duplicates.packets, stats.duplicates.bytes
-        );
-        println!(
-            "    | {} packets marked with the CE ECN codepoint in transit ({} bytes)",
-            stats.congestion_experienced.packets, stats.congestion_experienced.bytes
-        );
-        println!(
-            "    | {} packets dropped in transit ({} bytes)",
-            stats.dropped_injected.packets + stats.dropped_buffer_full.packets,
-            stats.dropped_injected.bytes + stats.dropped_buffer_full.bytes
-        );
-        println!(
-            "  * Received packets: {} ({} bytes)",
-            stats.received.packets, stats.received.bytes
-        );
-        println!(
-            "    | {} packets received out of order ({} bytes)",
-            stats.received_out_of_order.packets, stats.received_out_of_order.bytes
-        );
-    }
-
-    println!("--- Max buffer usage per node ---");
-    let mut buffer_usage: Vec<_> = verified_simulation.stats.stats_by_node.iter().collect();
-    buffer_usage.sort_unstable_by(|t1, t2| {
-        t1.1.max_buffer_usage
-            .cmp(&t2.1.max_buffer_usage)
-            .then(t2.0.cmp(t1.0))
-    });
-    for (node_id, stats) in buffer_usage.into_iter().rev() {
-        println!(
-            "* {node_id}: {} bytes ({} packets dropped due to buffer being full)",
-            stats.max_buffer_usage, stats.dropped_buffer_full.packets
-        );
-    }
-
-    if !verified_simulation.stats.stats_by_link.is_empty() {
-        println!("--- Link stats ---");
-    }
-    let mut link_stats: Vec<_> = verified_simulation.stats.stats_by_link.iter().collect();
-    link_stats.sort_unstable_by_key(|(id, _)| *id);
-    for (link_id, stats) in link_stats {
-        println!(
-            "* {link_id}: {} packets lost in transit ({} bytes)",
-            stats.dropped_in_transit.packets, stats.dropped_in_transit.bytes
-        );
-    }
+    print_node_stats(&verified_simulation, server_node, client_node);
+    print_max_buffer_usage_per_node(&verified_simulation);
+    print_link_stats(&verified_simulation, &network);
 
     const DISPLAY_MAX_ERRORS: usize = 10;
     if !verified_simulation.non_fatal_errors.is_empty() {

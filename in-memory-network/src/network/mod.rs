@@ -273,6 +273,10 @@ impl InMemoryNetwork {
         self.links_by_id[link_id].lock().status_str()
     }
 
+    pub fn get_link_bandwidth_bps(&self, link_id: &str) -> usize {
+        self.links_by_id[link_id].lock().bandwidth_bps
+    }
+
     /// Returns a udp socket for the provided host node
     ///
     /// Note: creating multiple sockets for a single node results in unspecified behavior

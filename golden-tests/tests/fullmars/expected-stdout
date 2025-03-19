@@ -79,4 +79,87 @@
 * ODY: 0 bytes (0 packets dropped due to buffer being full)
 * TGO: 0 bytes (0 packets dropped due to buffer being full)
 --- Link stats ---
-* DSN-MRO: 2 packets lost in transit (137 bytes)
+* DSN-GND:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 13784 (0.00% of the link's bandwidth)
+* DSN-MRO:
+|-> Lost in transit 2 packets (137 bytes)
+|-> Max used bandwidth (bps): 109 (10.90% of the link's bandwidth)
+* DSN-MVN:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 190 (19.00% of the link's bandwidth)
+* DSN-ODY:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 0 (0.00% of the link's bandwidth)
+* DSN-TGO:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 982 (98.20% of the link's bandwidth)
+* GND-DSN:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 11728 (0.00% of the link's bandwidth)
+* ING-M20:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 13784 (0.01% of the link's bandwidth)
+* M20-ING:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 11728 (0.01% of the link's bandwidth)
+* M20-MRO:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 552 (0.06% of the link's bandwidth)
+* M20-MVN:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 0 (0.00% of the link's bandwidth)
+* M20-ODY:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 0 (0.00% of the link's bandwidth)
+* M20-TGO:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 13784 (1.38% of the link's bandwidth)
+* MRO-DSN:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 552 (0.06% of the link's bandwidth)
+* MRO-M20:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 2952 (0.03% of the link's bandwidth)
+* MRO-MSL:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 0 (0.00% of the link's bandwidth)
+* MSL-MRO:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 0 (0.00% of the link's bandwidth)
+* MSL-MVN:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 0 (0.00% of the link's bandwidth)
+* MSL-ODY:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 0 (0.00% of the link's bandwidth)
+* MSL-TGO:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 0 (0.00% of the link's bandwidth)
+* MVN-DSN:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 0 (0.00% of the link's bandwidth)
+* MVN-M20:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 1904 (0.02% of the link's bandwidth)
+* MVN-MSL:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 0 (0.00% of the link's bandwidth)
+* ODY-DSN:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 0 (0.00% of the link's bandwidth)
+* ODY-M20:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 0 (0.00% of the link's bandwidth)
+* ODY-MSL:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 0 (0.00% of the link's bandwidth)
+* TGO-DSN:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 13784 (1.38% of the link's bandwidth)
+* TGO-M20:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 9824 (0.10% of the link's bandwidth)
+* TGO-MSL:
+|-> Lost in transit 0 packets (0 bytes)
+|-> Max used bandwidth (bps): 0 (0.00% of the link's bandwidth)

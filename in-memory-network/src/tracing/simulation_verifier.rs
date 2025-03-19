@@ -451,6 +451,13 @@ impl SimulationVerifier {
             })
             .collect();
 
+        for (link_id, link) in self.links {
+            stats_by_link
+                .entry(link_id)
+                .or_default()
+                .max_used_bandwidth_bps = link.max_bandwidth_usage_bps();
+        }
+
         Ok(VerifiedSimulation {
             stats: SimulationStats {
                 stats_by_node,
@@ -618,11 +625,16 @@ mod replayed {
     pub struct ReplayedLink {
         status: UpdateLinkStatus,
         last_down_relative: Option<Duration>,
-        used_bps_in_bandwidth_window: usize,
+        bandwidth_usage_bps: usize,
         packets_in_bandwidth_window: VecDeque<(Duration, usize)>,
+        max_bandwidth_usage_bps: usize,
     }
 
     impl ReplayedLink {
+        pub fn max_bandwidth_usage_bps(&self) -> usize {
+            self.max_bandwidth_usage_bps
+        }
+
         pub fn is_up(&self) -> bool {
             matches!(self.status, UpdateLinkStatus::Up)
         }
@@ -659,17 +671,20 @@ mod replayed {
                 })
             {
                 let (_, bits) = self.packets_in_bandwidth_window.pop_front().unwrap();
-                self.used_bps_in_bandwidth_window -= bits;
+                self.bandwidth_usage_bps -= bits;
             }
 
             // Add the new packet to the window
             let packet_size_bits = packet_size_bytes * 8;
             self.packets_in_bandwidth_window
                 .push_back((packet_sent_time, packet_size_bits));
-            self.used_bps_in_bandwidth_window += packet_size_bits;
+            self.bandwidth_usage_bps += packet_size_bits;
 
             // Smooth out the bps if necessary
-            self.used_bps_in_bandwidth_window / window_seconds as usize
+            let bandwidth_usage = self.bandwidth_usage_bps / window_seconds as usize;
+            self.max_bandwidth_usage_bps = cmp::max(self.max_bandwidth_usage_bps, bandwidth_usage);
+
+            bandwidth_usage
         }
     }
 
@@ -678,8 +693,9 @@ mod replayed {
             Self {
                 status: UpdateLinkStatus::Up,
                 last_down_relative: None,
-                used_bps_in_bandwidth_window: 0,
+                bandwidth_usage_bps: 0,
                 packets_in_bandwidth_window: Default::default(),
+                max_bandwidth_usage_bps: 0,
             }
         }
     }

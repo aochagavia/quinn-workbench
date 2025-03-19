@@ -2,6 +2,7 @@ mod config;
 mod quic;
 mod quinn_extensions;
 mod udp;
+mod util;
 
 use crate::config::NetworkConfig;
 use crate::config::cli::Command;
