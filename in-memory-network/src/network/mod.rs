@@ -367,8 +367,7 @@ impl InMemoryNetwork {
         let link = self.walk_links(node, data.transmit.destination.ip(), |link| {
             has_links = true;
 
-            let bandwidth_available = link.lock().has_bandwidth_available(data);
-            if bandwidth_available {
+            if link.lock().has_bandwidth_available() {
                 ControlFlow::Break(link.clone())
             } else {
                 ControlFlow::Continue(())

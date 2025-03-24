@@ -370,7 +370,7 @@ mod test {
     #[tokio::test(start_paused = true)]
     async fn test_packet_is_delayed_by_buffering() {
         let bandwidths_and_delays = [
-            (BANDWIDTH_100_MBPS, Duration::from_millis(0)),
+            (BANDWIDTH_100_MBPS, Duration::from_millis(1)),
             (BANDWIDTH_8_KBPS, Duration::from_secs_f64(1.228)),
         ];
         for (bandwidth, expected_delay) in bandwidths_and_delays {

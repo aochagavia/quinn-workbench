@@ -91,7 +91,6 @@ impl Node {
         network.walk_links::<()>(self, data.transmit.destination.ip(), |link| {
             futures.push(NetworkLink::sleep_until_ready_to_send(
                 link.clone(),
-                data,
                 cancellation_token.clone(),
             ));
             ControlFlow::Continue(())
