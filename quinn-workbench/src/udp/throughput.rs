@@ -157,6 +157,7 @@ pub async fn run(
     let mut bytes_in_window = 0;
     let window_duration = Duration::from_millis(100);
 
+    let mut max_smoothed_throughput_bps = 0;
     for (arrival_time, bytes) in packets {
         // Remove throughput that's no longer in the window
         while window
@@ -172,12 +173,12 @@ pub async fn run(
         bytes_in_window += bytes;
 
         // Smoothed throughput
-        println!(
-            "{:06.3}s - {} bps",
-            arrival_time.as_secs_f64(),
-            bytes_in_window * 8 * 10
-        );
+        let smoothed_throughput_bps = bytes_in_window * 8 * 10;
+        max_smoothed_throughput_bps =
+            cmp::max(max_smoothed_throughput_bps, smoothed_throughput_bps);
     }
+
+    println!("* Max smoothed throughput (bps): {max_smoothed_throughput_bps}");
 
     let verified_simulation = tracer
         .verifier()
