@@ -1,4 +1,4 @@
-use quinn::udp::EcnCodepoint;
+use quinn::udp::{EcnCodepoint, Transmit};
 use std::net::SocketAddr;
 
 pub const UDP_OVERHEAD: usize = 8;
@@ -27,5 +27,15 @@ impl OwnedTransmit {
         };
 
         UDP_OVERHEAD + ip_overhead + self.contents.len()
+    }
+
+    pub fn as_transmit(&self) -> Transmit {
+        Transmit {
+            destination: self.destination,
+            ecn: self.ecn,
+            contents: &self.contents,
+            segment_size: self.segment_size,
+            src_ip: None,
+        }
     }
 }

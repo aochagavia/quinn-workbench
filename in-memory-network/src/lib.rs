@@ -35,7 +35,7 @@ mod test {
     use crate::network::spec::{
         NetworkInterface, NetworkLinkSpec, NetworkNodeSpec, NetworkSpec, NodeKind,
     };
-    use crate::pcap_exporter::PcapExporter;
+    use crate::pcap_exporter::NoOpPcapExporterFactory;
     use crate::quinn_interop::BufsAndMeta;
     use crate::tracing::tracer::SimulationStepTracer;
     use bon::builder;
@@ -213,10 +213,8 @@ mod test {
         InMemoryNetwork::initialize(
             network_spec.clone(),
             NetworkEvents::new(events.unwrap_or_default(), &network_spec.links),
-            Arc::new(SimulationStepTracer::new(
-                Arc::new(PcapExporter::noop()),
-                network_spec,
-            )),
+            Arc::new(SimulationStepTracer::new(network_spec)),
+            Arc::new(NoOpPcapExporterFactory),
             Rng::with_seed(42),
             Instant::now(),
         )

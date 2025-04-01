@@ -1,6 +1,7 @@
 use crate::network::InMemoryNetwork;
 use crate::network::inbound_queue::NextPacketDelivery;
 use crate::network::node::{Node, UdpEndpoint};
+use crate::pcap_exporter::PcapExporter;
 use crate::transmit::OwnedTransmit;
 use parking_lot::Mutex;
 use quinn::udp::{RecvMeta, Transmit};
@@ -23,15 +24,32 @@ impl UdpPoller for InMemoryUdpPoller {
 }
 
 pub struct InMemoryUdpSocket {
-    pub network: Arc<InMemoryNetwork>,
-    pub endpoint: Arc<UdpEndpoint>,
-    pub node: Arc<Node>,
-    pub next_packet_delivery: Mutex<Option<Pin<Box<NextPacketDelivery>>>>,
+    network: Arc<InMemoryNetwork>,
+    endpoint: Arc<UdpEndpoint>,
+    node: Arc<Node>,
+    next_packet_delivery: Mutex<Option<Pin<Box<NextPacketDelivery>>>>,
+    pcap_exporter: PcapExporter,
 }
 
 impl Debug for InMemoryUdpSocket {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str("InMemoryUdpSocket")
+    }
+}
+
+impl InMemoryUdpSocket {
+    pub fn from_node(
+        network: Arc<InMemoryNetwork>,
+        node: Arc<Node>,
+        pcap_exporter: PcapExporter,
+    ) -> Self {
+        InMemoryUdpSocket {
+            endpoint: node.udp_endpoint.as_ref().unwrap().clone(),
+            node,
+            network: network.clone(),
+            next_packet_delivery: Mutex::new(None),
+            pcap_exporter,
+        }
     }
 }
 
@@ -44,6 +62,10 @@ impl AsyncUdpSocket for InMemoryUdpSocket {
         // We don't have code to handle GSO, so let's ensure transmits are always a single UDP
         // packet
         assert!(transmit.segment_size.is_none());
+
+        // Track in pcap
+        let source_addr = self.node.quic_addr();
+        self.pcap_exporter.track_transmit(source_addr, transmit);
 
         let data = self.network.in_transit_data(
             &self.node,
@@ -94,6 +116,11 @@ impl AsyncUdpSocket for InMemoryUdpSocket {
 
             // Buffer
             buf[..transmit.contents.len()].copy_from_slice(&transmit.contents);
+
+            // Track in pcap
+            let source_addr = in_transit.data.source_endpoint.addr;
+            self.pcap_exporter
+                .track_transmit(source_addr, &transmit.as_transmit());
         }
 
         Poll::Ready(Ok(delivered_len))

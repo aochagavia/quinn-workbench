@@ -16,6 +16,7 @@ use crate::network::event::{NetworkEventPayload, NetworkEvents};
 use crate::network::inbound_queue::InboundQueue;
 use crate::network::node::Node;
 use crate::network::spec::{NetworkSpec, NodeKind};
+use crate::pcap_exporter::PcapExporterFactory;
 use crate::quinn_interop::InMemoryUdpSocket;
 use crate::tracing::tracer::SimulationStepTracer;
 use crate::transmit::OwnedTransmit;
@@ -53,6 +54,7 @@ pub struct InMemoryNetwork {
     pub(crate) tracer: Arc<SimulationStepTracer>,
     rng: Mutex<Rng>,
     next_transmit_number: AtomicU64,
+    pcap_exporter_factory: Arc<dyn PcapExporterFactory>,
 }
 
 impl InMemoryNetwork {
@@ -61,6 +63,7 @@ impl InMemoryNetwork {
         network_spec: NetworkSpec,
         events: NetworkEvents,
         tracer: Arc<SimulationStepTracer>,
+        pcap_exporter_factory: Arc<dyn PcapExporterFactory>,
         rng: Rng,
         start: Instant,
     ) -> anyhow::Result<Arc<Self>> {
@@ -170,6 +173,7 @@ impl InMemoryNetwork {
             tracer,
             rng: Mutex::new(rng),
             next_transmit_number: Default::default(),
+            pcap_exporter_factory,
         });
 
         // Process node buffers in the background
@@ -281,12 +285,11 @@ impl InMemoryNetwork {
     ///
     /// Note: creating multiple sockets for a single node results in unspecified behavior
     pub fn udp_socket_for_node(self: &Arc<InMemoryNetwork>, node: Arc<Node>) -> InMemoryUdpSocket {
-        InMemoryUdpSocket {
-            endpoint: node.udp_endpoint.as_ref().unwrap().clone(),
-            node,
-            network: self.clone(),
-            next_packet_delivery: Mutex::new(None),
-        }
+        let pcap_exporter = self
+            .pcap_exporter_factory
+            .create_pcap_exporter_for_node(&node.id)
+            .unwrap();
+        InMemoryUdpSocket::from_node(self.clone(), node, pcap_exporter)
     }
 
     /// Returns the host bound to the provided address

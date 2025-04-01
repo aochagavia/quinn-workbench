@@ -1,8 +1,7 @@
-use crate::InTransitData;
 use anyhow::Context;
 use parking_lot::Mutex;
 use pcap_file::pcapng::PcapNgWriter;
-use pcap_file::pcapng::blocks::enhanced_packet::{EnhancedPacketBlock, EnhancedPacketOption};
+use pcap_file::pcapng::blocks::enhanced_packet::EnhancedPacketBlock;
 use pcap_file::pcapng::blocks::interface_description::InterfaceDescriptionBlock;
 use pcap_file::pcapng::blocks::section_header::SectionHeaderBlock;
 use pcap_file::{DataLink, Endianness};
@@ -10,12 +9,34 @@ use pnet_packet::ip::IpNextHeaderProtocol;
 use pnet_packet::ipv4::MutableIpv4Packet;
 use pnet_packet::udp::MutableUdpPacket;
 use pnet_packet::{PacketSize, ipv4, udp};
-use quinn::udp::EcnCodepoint;
+use quinn::udp::Transmit;
+use std::fs;
 use std::io::{BufWriter, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::time::Instant;
+
+pub trait PcapExporterFactory: Send + Sync {
+    fn create_pcap_exporter_for_node(&self, node_id: &str) -> anyhow::Result<PcapExporter>;
+}
+
+pub struct NoOpPcapExporterFactory;
+impl PcapExporterFactory for NoOpPcapExporterFactory {
+    fn create_pcap_exporter_for_node(&self, _: &str) -> anyhow::Result<PcapExporter> {
+        Ok(PcapExporter::noop())
+    }
+}
+
+pub struct FileBasedPcapExporterFactory;
+impl PcapExporterFactory for FileBasedPcapExporterFactory {
+    fn create_pcap_exporter_for_node(&self, node_id: &str) -> anyhow::Result<PcapExporter> {
+        let file_name = format!("{node_id}.pcap");
+        let pcap_file = fs::File::create(&file_name)
+            .with_context(|| format!("failed to open {file_name} for writing"))?;
+        Ok(PcapExporter::new(pcap_file))
+    }
+}
 
 pub struct PcapExporter {
     capture_start: Instant,
@@ -65,13 +86,7 @@ impl PcapExporter {
             .context("failed to flush pcap writer")
     }
 
-    pub fn track_packet(
-        &self,
-        data: &InTransitData,
-        source_addr: &SocketAddr,
-        ecn: Option<EcnCodepoint>,
-    ) {
-        let transmit = &data.transmit;
+    pub fn track_transmit(&self, source_addr: SocketAddr, transmit: &Transmit) {
         let IpAddr::V4(source) = source_addr.ip() else {
             unreachable!()
         };
@@ -88,7 +103,7 @@ impl PcapExporter {
         udp_writer.set_source(source_addr.port());
         udp_writer.set_destination(transmit.destination.port());
         udp_writer.set_length(udp_packet_length);
-        udp_writer.set_payload(&transmit.contents);
+        udp_writer.set_payload(transmit.contents);
         let checksum = udp::ipv4_checksum(&udp_writer.to_immutable(), &source, &destination);
         udp_writer.set_checksum(checksum);
         drop(udp_writer);
@@ -109,7 +124,7 @@ impl PcapExporter {
         ip_writer.set_destination(destination);
         ip_writer.set_payload(&udp_packet);
         ip_writer.set_total_length(ip_packet_length);
-        ip_writer.set_ecn(ecn.map(|codepoint| codepoint as u8).unwrap_or(0));
+        ip_writer.set_ecn(transmit.ecn.map(|codepoint| codepoint as u8).unwrap_or(0));
         let checksum = ipv4::checksum(&ip_writer.to_immutable());
         ip_writer.set_checksum(checksum);
         let ip_packet_length = ip_writer.packet_size();
@@ -119,10 +134,6 @@ impl PcapExporter {
 
         self.total_tracked_packets.fetch_add(1, Ordering::Relaxed);
 
-        let options = vec![EnhancedPacketOption::Comment(
-            format!("Transmit no. {}", data.number).into(),
-        )];
-
         let mut writer = self.writer.lock();
         writer
             .write_pcapng_block(EnhancedPacketBlock {
@@ -130,7 +141,7 @@ impl PcapExporter {
                 timestamp: correct_timestamp(self.capture_start.elapsed()),
                 original_len: ip_packet.len() as u32,
                 data: ip_packet.into(),
-                options,
+                options: Vec::new(),
             })
             .unwrap();
     }

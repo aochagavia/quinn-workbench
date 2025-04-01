@@ -3,7 +3,6 @@ use crate::network::event::NetworkEventPayload;
 use crate::network::link::NetworkLink;
 use crate::network::node::Node;
 use crate::network::spec::NetworkSpec;
-use crate::pcap_exporter::PcapExporter;
 use crate::tracing::simulation_step::{
     GenericPacketEvent, PacketDropped, PacketHasExtraDelay, PacketInTransit, PacketLostInTransit,
     SimulationStep, SimulationStepKind,
@@ -18,17 +17,15 @@ use tokio::time::Instant;
 
 pub struct SimulationStepTracer {
     simulation_start: Instant,
-    pcap_exporter: Arc<PcapExporter>,
     recorded_steps: Mutex<SimulationStepper>,
     network_spec: NetworkSpec,
     already_warned_dropped_from_buffer: Mutex<HashSet<Arc<str>>>,
 }
 
 impl SimulationStepTracer {
-    pub fn new(pcap_exporter: Arc<PcapExporter>, spec: NetworkSpec) -> Self {
+    pub fn new(spec: NetworkSpec) -> Self {
         Self {
             simulation_start: Instant::now(),
-            pcap_exporter,
             recorded_steps: Default::default(),
             network_spec: spec,
             already_warned_dropped_from_buffer: Mutex::default(),
@@ -181,12 +178,5 @@ impl SimulationStepTracer {
                 node_id: host_id.clone(),
             },
         ));
-    }
-
-    pub fn track_sent_in_pcap(&self, data: &InTransitData, current_node: &Node) {
-        if let Some(endpoint) = &current_node.udp_endpoint {
-            self.pcap_exporter
-                .track_packet(data, &endpoint.addr, data.transmit.ecn);
-        };
     }
 }

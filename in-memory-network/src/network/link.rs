@@ -129,7 +129,6 @@ impl NetworkLink {
         assert!(matches!(self.status, LinkStatus::Up));
 
         // Record
-        self.tracer.track_sent_in_pcap(&data, current_node);
         self.tracer
             .track_packet_in_transit(current_node, self, &data);
 

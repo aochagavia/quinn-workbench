@@ -6,7 +6,7 @@ use fastrand::Rng;
 use in_memory_network::network::InMemoryNetwork;
 use in_memory_network::network::event::NetworkEvents;
 use in_memory_network::network::spec::NetworkSpec;
-use in_memory_network::pcap_exporter::PcapExporter;
+use in_memory_network::pcap_exporter::FileBasedPcapExporterFactory;
 use in_memory_network::quinn_interop::BufsAndMeta;
 use in_memory_network::tracing::tracer::SimulationStepTracer;
 use quinn::AsyncUdpSocket;
@@ -27,7 +27,6 @@ pub async fn run(
     let simulation_start = Instant::now();
 
     // Network
-    let network_check_pcap_exporter = Arc::new(PcapExporter::new(std::io::empty()));
     let network_spec: NetworkSpec = network_config.network_graph.into();
     let network_events = NetworkEvents::new(
         network_config
@@ -38,14 +37,12 @@ pub async fn run(
             .collect(),
         &network_spec.links,
     );
-    let tracer = Arc::new(SimulationStepTracer::new(
-        network_check_pcap_exporter,
-        network_spec.clone(),
-    ));
+    let tracer = Arc::new(SimulationStepTracer::new(network_spec.clone()));
     let network = InMemoryNetwork::initialize(
         network_spec.clone(),
         network_events,
         tracer.clone(),
+        Arc::new(FileBasedPcapExporterFactory),
         Rng::with_seed(cli_opt.network_rng_seed),
         simulation_start,
     )?;

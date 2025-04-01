@@ -7,7 +7,7 @@ use fastrand::Rng;
 use in_memory_network::network::InMemoryNetwork;
 use in_memory_network::network::event::NetworkEvents;
 use in_memory_network::network::spec::NetworkSpec;
-use in_memory_network::pcap_exporter::PcapExporter;
+use in_memory_network::pcap_exporter::{FileBasedPcapExporterFactory, NoOpPcapExporterFactory};
 use in_memory_network::tracing::tracer::SimulationStepTracer;
 use parking_lot::Mutex;
 use quinn_proto::VarInt;
@@ -33,7 +33,6 @@ impl QuicSimulation {
         quic_options: &QuicOpt,
         network_config: NetworkConfig,
         quinn_config: QuinnJsonConfig,
-        pcap_exporter: Arc<PcapExporter>,
     ) -> anyhow::Result<()> {
         println!("--- Params ---");
         let (quinn_rng_seed, simulated_network_rng_seed) = if options.non_deterministic {
@@ -57,7 +56,6 @@ impl QuicSimulation {
         let start = Instant::now();
 
         // Network check
-        let network_check_pcap_exporter = Arc::new(PcapExporter::new(std::io::empty()));
         let network_spec: NetworkSpec = network_config.network_graph.into();
         let network_events = NetworkEvents::new(
             network_config
@@ -71,10 +69,8 @@ impl QuicSimulation {
         let network = InMemoryNetwork::initialize(
             network_spec.clone(),
             network_events.clone(),
-            Arc::new(SimulationStepTracer::new(
-                network_check_pcap_exporter,
-                network_spec.clone(),
-            )),
+            Arc::new(SimulationStepTracer::new(network_spec.clone())),
+            Arc::new(NoOpPcapExporterFactory),
             Rng::with_seed(simulated_network_rng_seed),
             start,
         )?;
@@ -102,14 +98,12 @@ impl QuicSimulation {
         let start = Instant::now();
 
         // Network
-        let tracer = Arc::new(SimulationStepTracer::new(
-            pcap_exporter,
-            network_spec.clone(),
-        ));
+        let tracer = Arc::new(SimulationStepTracer::new(network_spec.clone()));
         let network = InMemoryNetwork::initialize(
             network_spec,
             network_events,
             tracer.clone(),
+            Arc::new(FileBasedPcapExporterFactory),
             Rng::with_seed(simulated_network_rng_seed),
             start,
         )?;

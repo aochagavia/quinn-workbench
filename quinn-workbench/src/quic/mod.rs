@@ -6,7 +6,6 @@ use crate::quinn_extensions::ecn_cc::EcnCcFactory;
 use crate::quinn_extensions::no_cc::NoCCConfig;
 use crate::util::{print_link_stats, print_max_buffer_usage_per_node, print_node_stats};
 use anyhow::Context;
-use in_memory_network::pcap_exporter::PcapExporter;
 use quinn_proto::congestion::NewRenoConfig;
 use quinn_proto::{AckFrequencyConfig, EndpointConfig, TransportConfig, VarInt};
 use std::fs;
@@ -22,17 +21,10 @@ pub async fn run_and_report_stats(
     quic_options: &QuicOpt,
     network_config: NetworkConfig,
     quinn_config: QuinnJsonConfig,
-    pcap_exporter: Arc<PcapExporter>,
 ) -> anyhow::Result<()> {
     let mut simulation = QuicSimulation::new();
     let result = simulation
-        .run(
-            options,
-            quic_options,
-            network_config,
-            quinn_config,
-            pcap_exporter.clone(),
-        )
+        .run(options, quic_options, network_config, quinn_config)
         .await;
 
     let Some((tracer, network)) = simulation.tracer_and_network else {
