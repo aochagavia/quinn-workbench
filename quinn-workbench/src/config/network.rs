@@ -148,6 +148,11 @@ impl From<NetworkLinkJson> for in_memory_network::network::spec::NetworkLinkSpec
     }
 }
 
+#[derive(Deserialize)]
+pub struct NetworkEventsJson {
+    pub events: Vec<NetworkEventJson>,
+}
+
 #[derive(Deserialize, Clone)]
 pub struct NetworkEventJson {
     relative_time_ms: u64,

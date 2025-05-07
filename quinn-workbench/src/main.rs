@@ -6,6 +6,7 @@ mod util;
 
 use crate::config::NetworkConfig;
 use crate::config::cli::Command;
+use crate::config::network::NetworkEventsJson;
 use crate::udp::{ping, throughput};
 use anyhow::Context;
 use clap::Parser;
@@ -55,11 +56,11 @@ fn main() -> anyhow::Result<()> {
 
 fn load_network_config(cli: &CliOpt) -> anyhow::Result<NetworkConfig> {
     let network_graph = load_json(&cli.network_graph)?;
-    let network_events = load_json(&cli.network_events)?;
+    let network_events: NetworkEventsJson = load_json(&cli.network_events)?;
 
     Ok(NetworkConfig {
         network_graph,
-        network_events,
+        network_events: network_events.events,
     })
 }
 

@@ -1,10 +1,61 @@
-[
-  { "relative_time_ms": 0, "link": { "id": "GND-DSN", "status": "up" } },
-  { "relative_time_ms": 0, "link": { "id": "DSN-GND", "status": "up" } },
-  { "relative_time_ms": 0, "link": { "id": "DSN-MRO", "status": "up" } },
-  { "relative_time_ms": 0, "link": { "id": "MRO-DSN", "status": "up" } },
-  { "relative_time_ms": 0, "link": { "id": "MRO-M20", "status": "up" } },
-  { "relative_time_ms": 0, "link": { "id": "M20-MRO", "status": "up" } },
-  { "relative_time_ms": 0, "link": { "id": "M20-ING", "status": "up" } },
-  { "relative_time_ms": 0, "link": { "id": "ING-M20", "status": "up" } }
-]
+{
+  "type": "NetworkEvents",
+  "events": [
+    {
+      "relative_time_ms": 0,
+      "link": {
+        "id": "GND-DSN",
+        "status": "up"
+      }
+    },
+    {
+      "relative_time_ms": 0,
+      "link": {
+        "id": "DSN-GND",
+        "status": "up"
+      }
+    },
+    {
+      "relative_time_ms": 0,
+      "link": {
+        "id": "DSN-MRO",
+        "status": "up"
+      }
+    },
+    {
+      "relative_time_ms": 0,
+      "link": {
+        "id": "MRO-DSN",
+        "status": "up"
+      }
+    },
+    {
+      "relative_time_ms": 0,
+      "link": {
+        "id": "MRO-M20",
+        "status": "up"
+      }
+    },
+    {
+      "relative_time_ms": 0,
+      "link": {
+        "id": "M20-MRO",
+        "status": "up"
+      }
+    },
+    {
+      "relative_time_ms": 0,
+      "link": {
+        "id": "M20-ING",
+        "status": "up"
+      }
+    },
+    {
+      "relative_time_ms": 0,
+      "link": {
+        "id": "ING-M20",
+        "status": "up"
+      }
+    }
+  ]
+}
