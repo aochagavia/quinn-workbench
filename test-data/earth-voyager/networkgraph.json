@@ -1,0 +1,51 @@
+{
+    "type": "NetworkGraph",
+    "nodes": [
+        {
+            "id": "Earth",
+            "type": "host",
+            "bufferSizeBytes": 1000000000,
+            "interfaces": [
+                {
+                    "addresses": [
+                        {
+                            "address": "192.168.40.1/24"
+                        }
+                    ],
+                    "routes": []
+                }
+            ]
+        },
+        {
+            "id": "Voyager",
+            "type": "host",
+            "bufferSizeBytes": 1000000000,
+            "interfaces": [
+                {
+                    "addresses": [
+                        {
+                            "address": "192.168.40.2/24"
+                        }
+                    ],
+                    "routes": []
+                }
+            ]
+        }
+    ],
+    "links": [
+      {
+        "id": "Earth->Voyager",
+        "source": "192.168.40.1",
+        "target": "192.168.40.2",
+        "delay_ms": 86400000,
+        "bandwidth_bps": 10000000
+      },
+      {
+        "id": "Voyager->Earth",
+        "source": "192.168.40.2",
+        "target": "192.168.40.1",
+        "delay_ms": 86400000,
+        "bandwidth_bps": 10000000
+      }
+    ]
+}
