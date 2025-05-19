@@ -38,14 +38,12 @@ fn main() -> anyhow::Result<()> {
     match &opt.command {
         Command::Quic(quic_opt) => {
             let quinn = load_json(&quic_opt.quinn_config)?;
-            let result = rt.block_on(quic::run_and_report_stats(
+            rt.block_on(quic::run_and_report_stats(
                 &opt,
                 quic_opt,
                 network_config,
                 quinn,
-            ));
-
-            result
+            ))
         }
         Command::Ping(ping_opt) => rt.block_on(ping::run(&opt, ping_opt, network_config)),
         Command::Throughput(throughput_opt) => {
