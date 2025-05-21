@@ -1,4 +1,5 @@
 use crate::InTransitData;
+use crate::async_rt::time::Instant;
 use crate::network::event::NetworkEventPayload;
 use crate::network::link::NetworkLink;
 use crate::network::node::Node;
@@ -9,7 +10,6 @@ use crate::tracing::simulation_step::{
 };
 use crate::tracing::simulation_stepper::SimulationStepper;
 use crate::tracing::simulation_verifier::SimulationVerifier;
-use async_runtime::time::Instant;
 use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::sync::Arc;

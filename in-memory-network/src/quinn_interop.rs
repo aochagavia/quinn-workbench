@@ -3,6 +3,7 @@ use crate::network::inbound_queue::NextPacketDelivery;
 use crate::network::node::{Node, UdpEndpoint};
 use crate::pcap_exporter::PcapExporter;
 use crate::transmit::OwnedTransmit;
+use cfg_if::cfg_if;
 use parking_lot::Mutex;
 use quinn::udp::{RecvMeta, Transmit};
 use quinn::{AsyncUdpSocket, UdpPoller};
@@ -199,5 +200,66 @@ impl Future for UdpReceive<'_, '_> {
 
         let mut bufs: Vec<_> = bufs.iter_mut().map(|b| IoSliceMut::new(b)).collect();
         socket.poll_recv(cx, &mut bufs, meta)
+    }
+}
+
+cfg_if! {
+    if #[cfg(feature = "rt-custom")] {
+        use async_runtime::rt::Rt;
+        use async_runtime::time::timer::Timer;
+        use std::time::Instant;
+        use std::net::UdpSocket;
+        use quinn::{AsyncTimer, Runtime};
+
+        pub struct RtAdapter;
+
+        impl Debug for RtAdapter {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                write!(f, "rt-adapter")
+            }
+        }
+
+        impl Runtime for RtAdapter {
+            fn new_timer(&self, i: Instant) -> Pin<Box<dyn AsyncTimer>> {
+                Box::pin(RtTimerAdapter { inner: Rt::active().new_timer(i) })
+            }
+
+            fn spawn(&self, future: Pin<Box<dyn Future<Output = ()> + Send>>) {
+                Rt::active().spawn(future)
+            }
+
+            fn wrap_udp_socket(&self, _: UdpSocket) -> io::Result<Arc<dyn AsyncUdpSocket>> {
+                unimplemented!("not used")
+            }
+
+            fn now(&self) -> Instant {
+                Rt::active().now()
+            }
+        }
+
+        pin_project_lite::pin_project! {
+            struct RtTimerAdapter {
+                #[pin]
+                inner: Timer
+            }
+        }
+
+        impl Debug for RtTimerAdapter {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                write!(f, "rt-timer-adapter")
+            }
+        }
+
+        impl AsyncTimer for RtTimerAdapter {
+            fn reset(self: Pin<&mut Self>, i: Instant) {
+                let this = self.project();
+                this.inner.reset(i)
+            }
+
+            fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<()> {
+                let this = self.project();
+                this.inner.poll(cx)
+            }
+        }
     }
 }

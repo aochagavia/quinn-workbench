@@ -1,6 +1,8 @@
+use event_listener::Event;
 use in_memory_network::network::InMemoryNetwork;
 use in_memory_network::network::node::Node;
 use in_memory_network::tracing::simulation_verifier::VerifiedSimulation;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub fn print_max_buffer_usage_per_node(verified_simulation: &VerifiedSimulation) {
     println!("--- Max buffer usage per node ---");
@@ -80,5 +82,34 @@ pub fn print_node_stats(
             "    | {} packets received out of order ({} bytes)",
             stats.received_out_of_order.packets, stats.received_out_of_order.bytes
         );
+    }
+}
+
+pub struct CancellationToken {
+    cancelled: AtomicBool,
+    event: Event,
+}
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        Self {
+            cancelled: false.into(),
+            event: Event::new(),
+        }
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+        self.event.notify(usize::MAX);
+    }
+
+    pub async fn cancelled(&self) {
+        if !self.cancelled.load(Ordering::Relaxed) {
+            self.event.listen().await;
+        }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
     }
 }

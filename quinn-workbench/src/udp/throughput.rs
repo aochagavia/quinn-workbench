@@ -1,8 +1,13 @@
 use crate::config::NetworkConfig;
-use crate::config::cli::{CliOpt, ThroughputOpt};
-use crate::util::{print_link_stats, print_max_buffer_usage_per_node, print_node_stats};
+use crate::config::cli::ThroughputOpt;
+use crate::util::{
+    CancellationToken, print_link_stats, print_max_buffer_usage_per_node, print_node_stats,
+};
 use anyhow::Context as _;
 use fastrand::Rng;
+use futures::FutureExt;
+use in_memory_network::async_rt;
+use in_memory_network::async_rt::time::Instant;
 use in_memory_network::network::InMemoryNetwork;
 use in_memory_network::network::event::NetworkEvents;
 use in_memory_network::network::spec::NetworkSpec;
@@ -16,11 +21,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{cmp, fs};
-use tokio::time::Instant;
-use tokio_util::sync::CancellationToken;
 
 pub async fn run(
-    cli_opt: &CliOpt,
     throughput_opt: &ThroughputOpt,
     network_config: NetworkConfig,
 ) -> anyhow::Result<()> {
@@ -43,7 +45,7 @@ pub async fn run(
         network_events,
         tracer.clone(),
         Arc::new(FileBasedPcapExporterFactory),
-        Rng::with_seed(cli_opt.network_rng_seed),
+        Rng::with_seed(throughput_opt.network.network_rng_seed),
         simulation_start,
     )?;
 
@@ -57,26 +59,26 @@ pub async fn run(
     println!("--- Throughput test ---");
     let duration = Duration::from_millis(throughput_opt.duration_ms);
 
-    let server_ip = cli_opt.server_ip_address;
+    let server_ip = throughput_opt.network.server_ip_address;
     let server_node = network.host(server_ip);
     let server_socket = Arc::pin(network.udp_socket_for_node(server_node.clone()));
 
-    let client_ip = cli_opt.client_ip_address;
+    let client_ip = throughput_opt.network.client_ip_address;
     let client_node = network.host(client_ip);
     let client_socket = Arc::pin(network.udp_socket_for_node(client_node.clone()));
 
-    let cancellation_token = CancellationToken::new();
+    let cancellation_token = Arc::new(CancellationToken::new());
 
     // Destination
     let cancellation_token_cp = cancellation_token.clone();
-    let server_task = tokio::spawn(async move {
+    let server_task = async_rt::spawn(async move {
         let mut arrived_packets: Vec<(Duration, usize)> = Vec::new();
         let mut bufs_and_meta = BufsAndMeta::new(1200, 20);
 
         loop {
-            let packets = tokio::select! {
-                _ = cancellation_token_cp.cancelled() => { break },
-                packets = server_socket.receive(&mut bufs_and_meta) => packets.unwrap()
+            let packets = futures::select_biased! {
+                _ = cancellation_token_cp.cancelled().fuse() => { break },
+                packets = server_socket.receive(&mut bufs_and_meta).fuse() => packets.unwrap()
             };
 
             // Receive next transmits
@@ -105,7 +107,7 @@ pub async fn run(
 
     let cancellation_token_cp = cancellation_token.clone();
     let client_socket_cp = client_socket.clone();
-    tokio::spawn(async move {
+    async_rt::spawn(async move {
         let max_bytes_per_transmit = 1200;
         let payload = vec![0; max_bytes_per_transmit];
         loop {
@@ -132,12 +134,12 @@ pub async fn run(
             }
 
             // Sleep before sending the next packet
-            tokio::time::sleep(Duration::from_millis(send_interval_ms)).await;
+            async_rt::time::sleep(Duration::from_millis(send_interval_ms)).await;
         }
     });
 
     // Wait till done
-    tokio::time::sleep(duration).await;
+    async_rt::time::sleep(duration).await;
     println!("{:.2}s Done", simulation_start.elapsed().as_secs_f64());
 
     println!("--- Replay log ---");
@@ -182,8 +184,8 @@ pub async fn run(
         .context("failed to create simulation verifier")?
         .verify()
         .context("failed to verify simulation")?;
-    let server_node = network.host(cli_opt.server_ip_address);
-    let client_node = network.host(cli_opt.client_ip_address);
+    let server_node = network.host(throughput_opt.network.server_ip_address);
+    let client_node = network.host(throughput_opt.network.client_ip_address);
 
     print_node_stats(&verified_simulation, server_node, client_node);
     print_max_buffer_usage_per_node(&verified_simulation);

@@ -1,31 +1,37 @@
 [workspace]
-members = [ "async-runtime", "golden-tests", "in-memory-network", "quinn-workbench"]
+members = [ "async-runtime", "async-runtime-macros", "golden-tests", "in-memory-network", "quinn-workbench"]
 resolver = "2"
 
 [workspace.dependencies]
 anyhow = "1.0.86"
 async-lock = "3.4.0"
 bon = "3.3.0"
+cfg-if = "1.0.0"
 clap = { version = "4", features = ["derive"] }
 console = "0.15.11"
 event-listener = "5.4.0"
 fastrand = { version = "2.1.0" }
-futures = "0.3.31"
+futures = { version = "0.3.31", default-features = false, features = ["alloc", "std", "async-await"] }
 futures-util = "0.3.31"
 parking_lot = "0.12.3"
 pcap-file = "2.0.0"
+pin-project-lite = "0.2.16"
 pnet_packet = "0.34.0"
-quinn = "0.11"
+quinn = { version = "0.11", default-features = false }
 quinn-proto = "0.11"
+quote = "1.0.40"
 rcgen = "0.13.1"
 rustls = { version = "0.23.8", default-features = false, features = ["ring"] }
 serde = "1.0.203"
 serde_json = "1.0.117"
 serde_with = "3.11.0"
 similar = { version = "2.7.0", features = ["inline"] }
+syn = {version = "2.0.101", features = ["full"]}
 thiserror = "2.0.12"
 tokio = { version = "1.37.0", features = ["test-util", "macros"] }
-tokio-util = "0.7.13"
-tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 uuid = { version = "1.11.0" }
+
+[profile.profiling]
+inherits = "release"
+debug = true

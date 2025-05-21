@@ -12,6 +12,8 @@ pub mod route;
 pub mod spec;
 
 use crate::InTransitData;
+use crate::async_rt;
+use crate::async_rt::time::Instant;
 use crate::network::event::{NetworkEventPayload, NetworkEvents};
 use crate::network::inbound_queue::InboundQueue;
 use crate::network::node::Node;
@@ -21,7 +23,6 @@ use crate::quinn_interop::InMemoryUdpSocket;
 use crate::tracing::tracer::SimulationStepTracer;
 use crate::transmit::OwnedTransmit;
 use anyhow::{anyhow, bail};
-use async_runtime::time::Instant;
 use fastrand::Rng;
 use futures_util::StreamExt;
 use link::NetworkLink;
@@ -190,10 +191,10 @@ impl InMemoryNetwork {
 
         // Process events in the background
         let network_clone = Arc::downgrade(&network);
-        async_runtime::spawn(async move {
+        async_rt::spawn(async move {
             for event in events.sorted_events.into_iter() {
                 // Wait until next event should run
-                async_runtime::time::sleep_until(start + event.relative_time).await;
+                async_rt::time::sleep_until(start + event.relative_time).await;
 
                 if let Some(network) = network_clone.upgrade() {
                     network.process_event(event.payload);
@@ -327,12 +328,12 @@ impl InMemoryNetwork {
         let timeout = Duration::from_secs(3600 * 24 * days);
 
         // Ensure the packets arrived at each host
-        let a_to_b = async_runtime::time::timeout(
+        let a_to_b = async_rt::time::timeout(
             timeout,
             InboundQueue::receive(host_b.udp_endpoint.as_ref().unwrap().inbound.clone(), 1),
         )
         .await;
-        let b_to_a = async_runtime::time::timeout(
+        let b_to_a = async_rt::time::timeout(
             timeout,
             InboundQueue::receive(host_a.udp_endpoint.as_ref().unwrap().inbound.clone(), 1),
         )
@@ -504,9 +505,7 @@ fn spawn_node_buffer_processors(
 ) {
     for (node, outbound_rx) in nodes {
         let network = network.clone();
-        async_runtime::spawn(
-            async move { process_buffer_for_node(network, node, outbound_rx).await },
-        );
+        async_rt::spawn(async move { process_buffer_for_node(network, node, outbound_rx).await });
     }
 }
 
@@ -571,7 +570,7 @@ fn spawn_packet_forwarders(network: Arc<InMemoryNetwork>) {
     for link in network.links_by_id.values() {
         let network = network.clone();
         let link = link.clone();
-        async_runtime::spawn(forward_packets_for_link(network, link));
+        async_rt::spawn(forward_packets_for_link(network, link));
     }
 }
 

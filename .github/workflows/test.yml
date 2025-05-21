@@ -7,8 +7,11 @@ on:
   pull_request:
 jobs:
   test:
-    name: Run tests
+    name: Run tests (`${{ matrix.feature }}` async runtime)
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        feature: ["rt-tokio", "rt-custom"]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -19,12 +22,12 @@ jobs:
           /tmp/install-rustup --profile default -y
       - uses: Swatinem/rust-cache@v2
       - name: Run unit tests
-        run: cargo test
+        run: cargo test --no-default-features --features ${{ matrix.feature }}
       - name: Compile all binaries
-        run: cargo build --release
+        run: cargo build --release --no-default-features --features ${{ matrix.feature }}
       - name: Run golden tests
-        run: cargo run --release --bin golden-tests
+        run: cargo run --release --bin golden-tests --no-default-features --features ${{ matrix.feature }}
       - name: Run formatting check
         run: cargo fmt --check
       - name: Run clippy
-        run: cargo clippy
+        run: cargo clippy --no-default-features --features ${{ matrix.feature }}

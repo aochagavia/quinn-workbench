@@ -1,6 +1,6 @@
-use crate::config::NetworkConfig;
-use crate::config::cli::{CliOpt, QuicOpt};
+use crate::config::cli::QuicOpt;
 use crate::config::quinn::QuinnJsonConfig;
+use crate::load_network_config;
 use crate::quic::simulation::QuicSimulation;
 use crate::quinn_extensions::ecn_cc::EcnCcFactory;
 use crate::quinn_extensions::no_cc::NoCCConfig;
@@ -17,14 +17,13 @@ mod server;
 pub mod simulation;
 
 pub async fn run_and_report_stats(
-    options: &CliOpt,
     quic_options: &QuicOpt,
-    network_config: NetworkConfig,
     quinn_config: QuinnJsonConfig,
 ) -> anyhow::Result<()> {
     let mut simulation = QuicSimulation::new();
+    let network_config = load_network_config(&quic_options.network)?;
     let result = simulation
-        .run(options, quic_options, network_config, quinn_config)
+        .run(quic_options, network_config, quinn_config)
         .await;
 
     let Some((tracer, network)) = simulation.tracer_and_network else {
@@ -44,8 +43,8 @@ pub async fn run_and_report_stats(
         .context("failed to create simulation verifier")?
         .verify()
         .context("failed to verify simulation")?;
-    let server_node = network.host(options.server_ip_address);
-    let client_node = network.host(options.client_ip_address);
+    let server_node = network.host(quic_options.network.server_ip_address);
+    let client_node = network.host(quic_options.network.client_ip_address);
     print_node_stats(&verified_simulation, server_node, client_node);
     print_max_buffer_usage_per_node(&verified_simulation);
     print_link_stats(&verified_simulation, &network);

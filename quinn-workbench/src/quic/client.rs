@@ -1,6 +1,9 @@
 use crate::config::quinn::QuinnJsonConfig;
 use anyhow::Context;
+use async_lock::Semaphore;
 use fastrand::Rng;
+use in_memory_network::async_rt;
+use in_memory_network::async_rt::time::Instant;
 use in_memory_network::quinn_interop::InMemoryUdpSocket;
 use parking_lot::Mutex;
 use quinn::Endpoint;
@@ -10,8 +13,6 @@ use rustls::RootCertStore;
 use rustls::pki_types::CertificateDer;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::Semaphore;
-use tokio::time::Instant;
 
 pub async fn run_connection(
     client: Endpoint,
@@ -50,13 +51,13 @@ pub async fn run_connection(
             *requests_left -= 1;
         }
 
-        let permit = requests_semaphore.clone().acquire_owned().await.unwrap();
+        let permit = requests_semaphore.clone().acquire_arc().await;
         requests_made += 1;
 
         // Actually make the request
         let connection = connection.clone();
         let connection_name = connection_name.clone();
-        let request_task = tokio::spawn(async move {
+        let request_task = async_rt::spawn(async move {
             let request = "GET /index.html";
             println!(
                 "{:.2}s {request} (stream = {connection_name}{requests_made})",
@@ -110,7 +111,7 @@ pub fn client_endpoint(
         crate::quic::endpoint_config(seed),
         None,
         Arc::new(client_socket),
-        quinn::default_runtime().unwrap(),
+        async_rt::active_rt(),
     )
     .context("failed to create client endpoint")?;
 
