@@ -5,12 +5,14 @@ mod udp;
 mod util;
 
 use crate::config::NetworkConfig;
-use crate::config::cli::Command;
+use crate::config::cli::{Command, NetworkOpt};
 use crate::config::network::NetworkEventsJson;
 use crate::udp::{ping, throughput};
 use anyhow::Context;
+use cfg_if::cfg_if;
 use clap::Parser;
 use config::cli::CliOpt;
+use in_memory_network::async_rt;
 use serde::de::DeserializeOwned;
 use std::fs::File;
 use std::path::Path;
@@ -27,32 +29,38 @@ fn main() -> anyhow::Result<()> {
     // Safety: we are fully single-threaded
     unsafe { std::env::set_var("SSLKEYLOGFILE", "keylog.key") };
     let opt = CliOpt::parse();
-    let network_config = load_network_config(&opt)?;
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .start_paused(true)
-        .build()
-        .expect("failed to initialize tokio");
-
+    let rt = async_rt::new_rt();
     match &opt.command {
         Command::Quic(quic_opt) => {
             let quinn = load_json(&quic_opt.quinn_config)?;
-            rt.block_on(quic::run_and_report_stats(
-                &opt,
-                quic_opt,
-                network_config,
-                quinn,
-            ))
+            rt.block_on(quic::run_and_report_stats(quic_opt, quinn))
         }
-        Command::Ping(ping_opt) => rt.block_on(ping::run(&opt, ping_opt, network_config)),
+        Command::Ping(ping_opt) => {
+            let network_config = load_network_config(&ping_opt.network)?;
+            rt.block_on(ping::run(ping_opt, network_config))
+        }
         Command::Throughput(throughput_opt) => {
-            rt.block_on(throughput::run(&opt, throughput_opt, network_config))
+            let network_config = load_network_config(&throughput_opt.network)?;
+            rt.block_on(throughput::run(throughput_opt, network_config))
+        }
+        Command::Rt => {
+            cfg_if! {
+                if #[cfg(feature = "rt-tokio")] {
+                    println!("tokio");
+                } else if #[cfg(feature = "rt-custom")] {
+                    println!("custom");
+                } else {
+                    compile_error!("unknown async runtime");
+                }
+            }
+
+            Ok(())
         }
     }
 }
 
-fn load_network_config(cli: &CliOpt) -> anyhow::Result<NetworkConfig> {
+fn load_network_config(cli: &NetworkOpt) -> anyhow::Result<NetworkConfig> {
     let network_graph = load_json(&cli.network_graph)?;
     let network_events: NetworkEventsJson = load_json(&cli.network_events)?;
 

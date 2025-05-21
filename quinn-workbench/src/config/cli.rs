@@ -4,6 +4,24 @@ use std::path::PathBuf;
 
 #[derive(Parser, Debug, Clone)]
 pub struct CliOpt {
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum Command {
+    /// Run the QUIC simulation
+    Quic(QuicOpt),
+    /// Run a ping simulation at the UDP level
+    Ping(PingOpt),
+    /// Run a throughput simulation at the UDP level
+    Throughput(ThroughputOpt),
+    /// Return the identifier of the async runtime used
+    Rt,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct NetworkOpt {
     /// The IP address of the node used as a client
     #[arg(long)]
     pub client_ip_address: IpAddr,
@@ -34,19 +52,6 @@ pub struct CliOpt {
     /// Path to the JSON file containing the network events
     #[arg(long)]
     pub network_events: PathBuf,
-
-    #[command(subcommand)]
-    pub command: Command,
-}
-
-#[derive(Subcommand, Debug, Clone)]
-pub enum Command {
-    /// Run the QUIC simulation
-    Quic(QuicOpt),
-    /// Run a ping simulation at the UDP level
-    Ping(PingOpt),
-    /// Run a throughput simulation at the UDP level
-    Throughput(ThroughputOpt),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -70,6 +75,9 @@ pub struct QuicOpt {
     /// Path to the JSON file containing the desired quinn config
     #[arg(long)]
     pub quinn_config: PathBuf,
+
+    #[command(flatten)]
+    pub network: NetworkOpt,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -87,6 +95,9 @@ pub struct PingOpt {
     /// its reply are considered lost)
     #[arg(long, default_value_t = 10_000)]
     pub deadline_ms: u64,
+
+    #[command(flatten)]
+    pub network: NetworkOpt,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -100,4 +111,7 @@ pub struct ThroughputOpt {
     /// If not provided, we find the link with the highest capacity and use its doubled bandwidth
     #[arg(long)]
     pub send_bps: Option<u64>,
+
+    #[command(flatten)]
+    pub network: NetworkOpt,
 }

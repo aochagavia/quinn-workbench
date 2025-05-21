@@ -1,5 +1,6 @@
 #![allow(clippy::type_complexity)]
 
+pub mod async_rt;
 pub mod network;
 pub mod pcap_exporter;
 pub mod quinn_interop;
@@ -38,7 +39,6 @@ mod test {
     use crate::pcap_exporter::NoOpPcapExporterFactory;
     use crate::quinn_interop::BufsAndMeta;
     use crate::tracing::tracer::SimulationStepTracer;
-    use async_runtime::time::Instant;
     use bon::builder;
     use fastrand::Rng;
     use quinn::crypto::rustls::QuicClientConfig;
@@ -216,7 +216,7 @@ mod test {
             Arc::new(SimulationStepTracer::new(network_spec)),
             Arc::new(NoOpPcapExporterFactory),
             Rng::with_seed(42),
-            Instant::now(),
+            async_rt::time::Instant::now(),
         )
         .unwrap()
     }
@@ -250,9 +250,10 @@ mod test {
         ClientConfig::new(Arc::new(QuicClientConfig::try_from(crypto).unwrap()))
     }
 
-    #[async_runtime::test(start_paused = true)]
+    #[cfg_attr(feature = "rt-custom", async_runtime::test)]
+    #[cfg_attr(feature = "rt-tokio", tokio::test(start_paused = true))]
     async fn test_quic_handshake_and_bidi_stream_works() {
-        let rt = quinn::default_runtime().unwrap();
+        let rt = async_rt::active_rt();
 
         // Network
         let network = default_network().call();
@@ -281,7 +282,7 @@ mod test {
         client_endpoint.set_default_client_config(client_config);
 
         // Run server in the background
-        let server_handle = async_runtime::spawn(async move {
+        let server_handle = async_rt::spawn(async move {
             let conn = server_endpoint.accept().await.unwrap().await.unwrap();
             let (mut bi_tx, mut bi_rx) = conn.accept_bi().await.unwrap();
 
@@ -310,7 +311,8 @@ mod test {
         server_handle.await.unwrap();
     }
 
-    #[async_runtime::test(start_paused = true)]
+    #[cfg_attr(feature = "rt-custom", async_runtime::test)]
+    #[cfg_attr(feature = "rt-tokio", tokio::test(start_paused = true))]
     async fn test_packet_arrives_at_expected_time() {
         // Sanity check
         let network = default_network().call();
@@ -365,7 +367,8 @@ mod test {
         }
     }
 
-    #[async_runtime::test(start_paused = true)]
+    #[cfg_attr(feature = "rt-custom", async_runtime::test)]
+    #[cfg_attr(feature = "rt-tokio", tokio::test(start_paused = true))]
     async fn test_packet_is_delayed_by_buffering() {
         let bandwidths_and_delays = [
             (BANDWIDTH_100_MBPS, Duration::from_millis(1)),
@@ -428,7 +431,8 @@ mod test {
         }
     }
 
-    #[async_runtime::test(start_paused = true)]
+    #[cfg_attr(feature = "rt-custom", async_runtime::test)]
+    #[cfg_attr(feature = "rt-tokio", tokio::test(start_paused = true))]
     async fn test_packet_is_buffered_when_link_down() {
         // Let one of the links be down for 10 seconds
         let network = default_network()

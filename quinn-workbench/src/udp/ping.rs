@@ -1,7 +1,9 @@
 use crate::config::NetworkConfig;
-use crate::config::cli::{CliOpt, PingOpt};
+use crate::config::cli::PingOpt;
 use anyhow::Context as _;
 use fastrand::Rng;
+use in_memory_network::async_rt;
+use in_memory_network::async_rt::time::Instant;
 use in_memory_network::network::InMemoryNetwork;
 use in_memory_network::network::event::NetworkEvents;
 use in_memory_network::network::spec::NetworkSpec;
@@ -16,13 +18,8 @@ use std::fs;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::Instant;
 
-pub async fn run(
-    cli_opt: &CliOpt,
-    ping_opt: &PingOpt,
-    network_config: NetworkConfig,
-) -> anyhow::Result<()> {
+pub async fn run(ping_opt: &PingOpt, network_config: NetworkConfig) -> anyhow::Result<()> {
     let simulation_start = Instant::now();
 
     // Network
@@ -42,7 +39,7 @@ pub async fn run(
         network_events,
         tracer.clone(),
         Arc::new(FileBasedPcapExporterFactory),
-        Rng::with_seed(cli_opt.network_rng_seed),
+        Rng::with_seed(ping_opt.network.network_rng_seed),
         simulation_start,
     )?;
 
@@ -58,17 +55,17 @@ pub async fn run(
     let deadline = Duration::from_millis(ping_opt.deadline_ms);
     let interval = Duration::from_millis(ping_opt.interval_ms);
 
-    let server_ip = cli_opt.server_ip_address;
+    let server_ip = ping_opt.network.server_ip_address;
     let server_node = network.host(server_ip);
     let server_socket = Arc::pin(network.udp_socket_for_node(server_node.clone()));
 
-    let client_ip = cli_opt.client_ip_address;
+    let client_ip = ping_opt.network.client_ip_address;
     let client_node = network.host(client_ip);
     let client_socket = Arc::pin(network.udp_socket_for_node(client_node.clone()));
 
     // Server
     let server_socket_cp = server_socket.clone();
-    tokio::spawn(async move {
+    async_rt::spawn(async move {
         let mut bufs_and_meta = BufsAndMeta::new(1200, 5);
 
         loop {
@@ -98,7 +95,7 @@ pub async fn run(
     let client_socket_cp = client_socket.clone();
     let in_flight_cp = in_flight.clone();
     let lost_cp = lost.clone();
-    tokio::spawn(async move {
+    async_rt::spawn(async move {
         let mut ping_nr: u64 = 0;
         loop {
             // Send ping
@@ -120,8 +117,8 @@ pub async fn run(
             // Track pings as lost after the deadline has passed
             let in_flight_cp = in_flight_cp.clone();
             let lost_cp = lost_cp.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(deadline).await;
+            async_rt::spawn(async move {
+                async_rt::time::sleep(deadline).await;
                 if let Some(ping_sent) = in_flight_cp.lock().remove(&ping_nr) {
                     lost_cp.lock().push(ping_nr);
                     let ping_lost = Instant::now();
@@ -135,12 +132,12 @@ pub async fn run(
             });
 
             // Sleep before sending the next ping
-            tokio::time::sleep(interval).await;
+            async_rt::time::sleep(interval).await;
         }
     });
 
     // Receiver
-    tokio::spawn(async move {
+    async_rt::spawn(async move {
         let mut bufs_and_meta = BufsAndMeta::new(1200, 5);
 
         loop {
@@ -164,7 +161,7 @@ pub async fn run(
     });
 
     // Wait till done
-    tokio::time::sleep(duration).await;
+    async_rt::time::sleep(duration).await;
     println!("{:.2}s Done", simulation_start.elapsed().as_secs_f64());
 
     println!("--- Replay log ---");

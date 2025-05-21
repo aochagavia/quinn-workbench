@@ -35,11 +35,11 @@ After [installing Rust](https://rustup.rs/), you can get started with:
 
 ```bash
 cargo run --release --bin quinn-workbench -- \
+  quic \
   --network-graph test-data/earth-mars/networkgraph-fullmars.json \
   --network-events test-data/earth-mars/events.json \
   --client-ip-address 192.168.40.1 \
   --server-ip-address 192.168.43.2 \
-  quic \
   --quinn-config test-data/earth-mars/quinn.json
 ```
 
@@ -47,11 +47,11 @@ Here's an example issuing a single request and receiving a 10 MiB response:
 
 ```bash
 cargo run --release --bin quinn-workbench -- \
+  quic \
   --network-graph test-data/earth-mars/networkgraph-fullmars.json \
   --network-events test-data/earth-mars/events.json \
   --client-ip-address 192.168.40.1 \
   --server-ip-address 192.168.43.2 \
-  quic \
   --quinn-config test-data/earth-mars/quinn.json \
   --requests 1 --response-size 10485760
 ```
@@ -60,12 +60,12 @@ Here's an example controlling the random seeds (which otherwise use a hardcoded 
 
 ```bash
 cargo run --release --bin quinn-workbench -- \
+  quic \
   --network-graph test-data/earth-mars/networkgraph-fullmars.json \
   --network-events test-data/earth-mars/events.json \
   --client-ip-address 192.168.40.1 \
   --server-ip-address 192.168.43.2 \
   --network-rng-seed 1337 \
-  quic \
   --quinn-config test-data/earth-mars/quinn.json \
   --quinn-rng-seed 1234
 ```
@@ -74,12 +74,12 @@ Here's an example using random seeds derived from a source of entropy:
 
 ```bash
 cargo run --release --bin quinn-workbench -- \
+  quic \
   --network-graph test-data/earth-mars/networkgraph-fullmars.json \
   --network-events test-data/earth-mars/events.json \
   --client-ip-address 192.168.40.1 \
   --server-ip-address 192.168.43.2 \
   --non-deterministic \
-  quic \
   --quinn-config test-data/earth-mars/quinn.json
 ```
 

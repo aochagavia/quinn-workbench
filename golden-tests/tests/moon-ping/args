@@ -1,7 +1,7 @@
+ping
+--duration-ms 3600000
+--interval-ms 60000
 --network-graph test-data/earth-moon/networkgraph-1orbiter-1moonasset.json
 --network-events test-data/earth-moon/events.json
 --client-ip-address 192.168.40.1
 --server-ip-address 192.168.41.2
-ping
---duration-ms 3600000
---interval-ms 60000

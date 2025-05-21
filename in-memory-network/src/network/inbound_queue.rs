@@ -1,5 +1,6 @@
 use crate::InTransitData;
-use async_runtime::time::{Instant, Sleep};
+use crate::async_rt;
+use crate::async_rt::time::Instant;
 use parking_lot::Mutex;
 use std::collections::BinaryHeap;
 use std::pin::Pin;
@@ -38,7 +39,7 @@ impl InboundQueue {
 }
 
 pub struct NextPacketDelivery {
-    sleep: Option<Pin<Box<Sleep>>>,
+    sleep: Option<Pin<Box<async_rt::Timer>>>,
     queue: Arc<Mutex<InboundQueue>>,
     max_transmits: usize,
 }
@@ -89,9 +90,7 @@ impl Future for NextPacketDelivery {
 
             if next_arrival_time > Instant::now() {
                 // Sleep in the next iteration until we are allowed to deliver the next packet
-                self.sleep = Some(Box::pin(async_runtime::time::sleep_until(
-                    next_arrival_time,
-                )));
+                self.sleep = Some(Box::pin(async_rt::time::sleep_until(next_arrival_time)));
             } else {
                 // Deliver the next packet
                 let data = self.queue.lock().queue.pop().unwrap();

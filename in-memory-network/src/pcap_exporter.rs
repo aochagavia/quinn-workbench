@@ -1,5 +1,5 @@
+use crate::async_rt::time::Instant;
 use anyhow::Context;
-use async_runtime::time::Instant;
 use parking_lot::Mutex;
 use pcap_file::pcapng::PcapNgWriter;
 use pcap_file::pcapng::blocks::enhanced_packet::EnhancedPacketBlock;

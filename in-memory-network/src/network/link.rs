@@ -1,11 +1,12 @@
 use crate::InTransitData;
+use crate::async_rt;
+use crate::async_rt::time::Instant;
 use crate::network::event::UpdateLinkStatus;
 use crate::network::inbound_queue::{InboundQueue, NextPacketDelivery};
 use crate::network::node::Node;
 use crate::network::spec::NetworkLinkSpec;
 use crate::tracing::tracer::SimulationStepTracer;
 use async_lock::Semaphore;
-use async_runtime::time::Instant;
 use event_listener::{Event, EventListener};
 use futures_util::future::Shared;
 use futures_util::{FutureExt, select_biased};
@@ -23,7 +24,7 @@ pub struct NetworkLink {
     pacer: Mutex<PacketPacer>,
     sleep_until_ready_to_send_semaphore: Arc<Semaphore>,
     status: LinkStatus,
-    last_down: Option<Instant>,
+    last_down: Option<async_rt::time::Instant>,
     delay: Duration,
     pub(crate) bandwidth_bps: usize,
     pub(crate) notify_packet_sent: Arc<Event>,
@@ -150,7 +151,7 @@ impl NetworkLink {
 
         let (tx, rx) = futures::channel::oneshot::channel();
         let semaphore = this.lock().sleep_until_ready_to_send_semaphore.clone();
-        async_runtime::spawn(async move {
+        async_rt::spawn(async move {
             // Only one task at a time may continue after this line (they will wait in order,
             // because the semaphore is fair)
             let _permit = semaphore.acquire().await;
@@ -164,7 +165,7 @@ impl NetworkLink {
             // Sleep until enough bandwidth or until cancelled, whichever comes first
             select_biased! {
                 _ = cancellation_token.fuse() => {}
-                _ = async_runtime::time::sleep(duration_until_enough_bandwidth).fuse() => {}
+                _ = async_rt::time::sleep(duration_until_enough_bandwidth).fuse() => {}
             }
 
             // Concurrency: keep the one-liner to shorten the lock on `this`

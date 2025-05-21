@@ -1,9 +1,13 @@
 use anyhow::{Context, bail};
+use clap::Parser;
 use std::path::PathBuf;
 use std::process::Command;
 
-static EXPECTED_STDOUT_FILE: &str = "expected-stdout";
-static EXPECTED_REPLAY_LOG_FILE: &str = "expected-replay-log";
+#[derive(Parser)]
+struct Cli {
+    #[arg(long)]
+    test_name: Option<String>,
+}
 
 struct TestCase {
     dir: PathBuf,
@@ -14,6 +18,26 @@ struct TestCase {
 }
 
 fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
+    let async_rt_output = Command::new("./target/release/quinn-workbench")
+        .arg("rt")
+        .output()
+        .context("failed to obtain async runtime used to compile quinn-workbench")?;
+    let async_rt_name = String::from_utf8(async_rt_output.stdout)?;
+    let async_rt_name = async_rt_name.trim();
+    if async_rt_name.is_empty() {
+        bail!(
+            "async runtime was empty... stderr: {}",
+            String::from_utf8_lossy(&async_rt_output.stderr)
+        );
+    }
+
+    println!("Quinn-workbench's async runtime: {async_rt_name}");
+
+    let expected_stdout_file = format!("expected-stdout.{async_rt_name}");
+    let expected_replay_log_file = format!("expected-replay-log.{async_rt_name}");
+
     let mut test_cases = Vec::new();
     let test_dirs =
         std::fs::read_dir("golden-tests/tests").context("golden tests root directory not found")?;
@@ -29,15 +53,24 @@ fn main() -> anyhow::Result<()> {
             continue;
         }
 
+        let Some(dir_name) = path.file_name().and_then(|s| s.to_str()) else {
+            bail!("invalid path: {}", path.display());
+        };
+
+        if cli.test_name.as_ref().is_some_and(|name| dir_name != name) {
+            println!("skipping path `{}`", path.display());
+            continue;
+        }
+
         let args_path = path.join("args");
         let args = std::fs::read_to_string(&args_path)
             .with_context(|| format!("no `args` file found at `{}`", args_path.display()))?;
 
-        let stdout_path = path.join(EXPECTED_STDOUT_FILE);
+        let stdout_path = path.join(&expected_stdout_file);
         let stdout = if stdout_path.is_file() {
             Some(std::fs::read_to_string(&stdout_path).with_context(|| {
                 format!(
-                    "no `{EXPECTED_STDOUT_FILE}` file found at `{}`",
+                    "no `{expected_stdout_file}` file found at `{}`",
                     stdout_path.display()
                 )
             })?)
@@ -45,11 +78,11 @@ fn main() -> anyhow::Result<()> {
             None
         };
 
-        let replay_log_path = path.join(EXPECTED_REPLAY_LOG_FILE);
+        let replay_log_path = path.join(&expected_replay_log_file);
         let replay_log = if replay_log_path.is_file() {
             Some(std::fs::read_to_string(&replay_log_path).with_context(|| {
                 format!(
-                    "no `{EXPECTED_REPLAY_LOG_FILE}` file found at `{}`",
+                    "no `{expected_replay_log_file}` file found at `{}`",
                     replay_log_path.display()
                 )
             })?)
@@ -69,7 +102,9 @@ fn main() -> anyhow::Result<()> {
     let mut errored = false;
     for test_case in test_cases {
         let name = test_case.name.clone();
-        if let Err(e) = run_quinn_workbench(test_case) {
+        if let Err(e) =
+            run_quinn_workbench(test_case, &expected_stdout_file, &expected_replay_log_file)
+        {
             println!("Error running golden test `{name}`");
             match e {
                 TestError::Internal(e) => println!("{e:?}"),
@@ -111,7 +146,11 @@ struct InvalidOutput {
     replay_log_diff: Option<String>,
 }
 
-fn run_quinn_workbench(test_case: TestCase) -> Result<(), TestError> {
+fn run_quinn_workbench(
+    test_case: TestCase,
+    expected_stdout_file: &str,
+    expected_replay_log_file: &str,
+) -> Result<(), TestError> {
     println!("Running `{}`...", test_case.name);
     let workbench_args = test_case.args.split_whitespace();
     let command = Command::new("./target/release/quinn-workbench")
@@ -136,7 +175,7 @@ fn run_quinn_workbench(test_case: TestCase) -> Result<(), TestError> {
         }
         None => {
             println!("... expected stdout not found, persisting the current one for future tests");
-            std::fs::write(test_case.dir.join(EXPECTED_STDOUT_FILE), stdout.as_bytes())
+            std::fs::write(test_case.dir.join(expected_stdout_file), stdout.as_bytes())
                 .context("failed to persist stdout")
                 .map_err(TestError::Internal)?;
         }
@@ -155,7 +194,7 @@ fn run_quinn_workbench(test_case: TestCase) -> Result<(), TestError> {
                 "... expected replay log not found, persisting the current one for future tests"
             );
             std::fs::write(
-                test_case.dir.join(EXPECTED_REPLAY_LOG_FILE),
+                test_case.dir.join(expected_replay_log_file),
                 replay_log.as_bytes(),
             )
             .context("failed to persist replay log")
