@@ -1,4 +1,5 @@
 use anyhow::Context;
+use async_runtime::time::Instant;
 use parking_lot::Mutex;
 use pcap_file::pcapng::PcapNgWriter;
 use pcap_file::pcapng::blocks::enhanced_packet::EnhancedPacketBlock;
@@ -15,7 +16,6 @@ use std::io::{BufWriter, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::time::Instant;
 
 pub trait PcapExporterFactory: Send + Sync {
     fn create_pcap_exporter_for_node(&self, node_id: &str) -> anyhow::Result<PcapExporter>;

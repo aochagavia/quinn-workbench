@@ -1,13 +1,16 @@
 [workspace]
-members = [ "golden-tests", "in-memory-network", "quinn-workbench"]
+members = [ "async-runtime", "golden-tests", "in-memory-network", "quinn-workbench"]
 resolver = "2"
 
 [workspace.dependencies]
 anyhow = "1.0.86"
+async-lock = "3.4.0"
 bon = "3.3.0"
 clap = { version = "4", features = ["derive"] }
 console = "0.15.11"
+event-listener = "5.4.0"
 fastrand = { version = "2.1.0" }
+futures = "0.3.31"
 futures-util = "0.3.31"
 parking_lot = "0.12.3"
 pcap-file = "2.0.0"
@@ -20,6 +23,7 @@ serde = "1.0.203"
 serde_json = "1.0.117"
 serde_with = "3.11.0"
 similar = { version = "2.7.0", features = ["inline"] }
+thiserror = "2.0.12"
 tokio = { version = "1.37.0", features = ["test-util", "macros"] }
 tokio-util = "0.7.13"
 tracing = "0.1.40"

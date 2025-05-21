@@ -4,6 +4,9 @@ use crate::network::inbound_queue::{InboundQueue, NextPacketDelivery};
 use crate::network::node::Node;
 use crate::network::spec::NetworkLinkSpec;
 use crate::tracing::tracer::SimulationStepTracer;
+use async_lock::Semaphore;
+use async_runtime::time::Instant;
+use event_listener::{Event, EventListener};
 use futures_util::future::Shared;
 use futures_util::{FutureExt, select_biased};
 use parking_lot::Mutex;
@@ -11,9 +14,6 @@ use std::mem;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Notify, Semaphore};
-use tokio::time::Instant;
-use tokio_util::sync::CancellationToken;
 
 pub struct NetworkLink {
     pub id: Arc<str>,
@@ -26,7 +26,7 @@ pub struct NetworkLink {
     last_down: Option<Instant>,
     delay: Duration,
     pub(crate) bandwidth_bps: usize,
-    pub(crate) notify_packet_sent: Arc<Notify>,
+    pub(crate) notify_packet_sent: Arc<Event>,
     pub(crate) congestion_event_ratio: f64,
     pub(crate) extra_delay: Duration,
     pub(crate) extra_delay_ratio: f64,
@@ -35,14 +35,14 @@ pub struct NetworkLink {
 pub(crate) enum LinkStatus {
     Up,
     Down {
-        up_tx: tokio::sync::oneshot::Sender<()>,
-        up_rx: Shared<tokio::sync::oneshot::Receiver<()>>,
+        up_tx: futures::channel::oneshot::Sender<()>,
+        up_rx: Shared<futures::channel::oneshot::Receiver<()>>,
     },
 }
 
 impl LinkStatus {
     pub(crate) fn new_down() -> Self {
-        let (up_tx, up_rx) = tokio::sync::oneshot::channel();
+        let (up_tx, up_rx) = futures::channel::oneshot::channel();
         LinkStatus::Down {
             up_tx,
             up_rx: up_rx.shared(),
@@ -56,7 +56,7 @@ impl LinkStatus {
         }
     }
 
-    fn notifier_for_link_up(&self) -> Option<Shared<tokio::sync::oneshot::Receiver<()>>> {
+    fn notifier_for_link_up(&self) -> Option<Shared<futures::channel::oneshot::Receiver<()>>> {
         match self {
             LinkStatus::Up => None,
             LinkStatus::Down { up_rx, .. } => Some(up_rx.clone()),
@@ -77,7 +77,7 @@ impl NetworkLink {
             sleep_until_ready_to_send_semaphore: Arc::new(Semaphore::new(1)),
             delay: l.delay,
             bandwidth_bps: l.bandwidth_bps as usize,
-            notify_packet_sent: Arc::new(Notify::new()),
+            notify_packet_sent: Arc::new(Event::new()),
             congestion_event_ratio: l.congestion_event_ratio,
             extra_delay: l.extra_delay,
             extra_delay_ratio: l.extra_delay_ratio,
@@ -141,19 +141,19 @@ impl NetworkLink {
 
     pub(crate) fn sleep_until_ready_to_send(
         this: Arc<Mutex<Self>>,
-        cancellation_token: CancellationToken,
-    ) -> tokio::sync::oneshot::Receiver<Arc<Mutex<Self>>> {
+        cancellation_token: EventListener,
+    ) -> futures::channel::oneshot::Receiver<Arc<Mutex<Self>>> {
         assert!(
             !this.lock().has_bandwidth_available(),
             "we should only wait when no bandwidth is available"
         );
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = futures::channel::oneshot::channel();
         let semaphore = this.lock().sleep_until_ready_to_send_semaphore.clone();
-        tokio::spawn(async move {
+        async_runtime::spawn(async move {
             // Only one task at a time may continue after this line (they will wait in order,
             // because the semaphore is fair)
-            let _permit = semaphore.acquire().await.unwrap();
+            let _permit = semaphore.acquire().await;
 
             let duration_until_enough_bandwidth = this
                 .lock()
@@ -163,8 +163,8 @@ impl NetworkLink {
 
             // Sleep until enough bandwidth or until cancelled, whichever comes first
             select_biased! {
-                _ = cancellation_token.cancelled().fuse() => {}
-                _ = tokio::time::sleep(duration_until_enough_bandwidth).fuse() => {}
+                _ = cancellation_token.fuse() => {}
+                _ = async_runtime::time::sleep(duration_until_enough_bandwidth).fuse() => {}
             }
 
             // Concurrency: keep the one-liner to shorten the lock on `this`
@@ -181,15 +181,19 @@ impl NetworkLink {
 
             // Only end the task after the packet has been sent. Otherwise, packets that are waiting
             // will think they can be sent too because "there is available bandwidth".
-            notify_packet_sent.notified().await
+            notify_packet_sent.listen().await
         });
 
         rx
     }
 
     pub(crate) fn has_bandwidth_available(&mut self) -> bool {
-        let packets_are_waiting_for_bandwidth =
-            self.sleep_until_ready_to_send_semaphore.available_permits() == 0;
+        // concurrency: note the line below acquires a permit, but drops it right away
+        let packets_are_waiting_for_bandwidth = self
+            .sleep_until_ready_to_send_semaphore
+            .try_acquire()
+            .is_none();
+
         if packets_are_waiting_for_bandwidth || self.status.is_down() {
             return false;
         }

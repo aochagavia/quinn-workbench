@@ -38,6 +38,7 @@ mod test {
     use crate::pcap_exporter::NoOpPcapExporterFactory;
     use crate::quinn_interop::BufsAndMeta;
     use crate::tracing::tracer::SimulationStepTracer;
+    use async_runtime::time::Instant;
     use bon::builder;
     use fastrand::Rng;
     use quinn::crypto::rustls::QuicClientConfig;
@@ -47,7 +48,6 @@ mod test {
     use std::net::Ipv4Addr;
     use std::sync::Arc;
     use std::time::Duration;
-    use tokio::time::Instant;
 
     const SERVER_ADDR: Ipv4Cidr = Ipv4Cidr::from_ipv4(Ipv4Addr::new(88, 88, 88, 88), 24);
     const ROUTER1_ADDR: Ipv4Cidr = Ipv4Cidr::from_ipv4(Ipv4Addr::new(200, 200, 200, 1), 24);
@@ -250,7 +250,7 @@ mod test {
         ClientConfig::new(Arc::new(QuicClientConfig::try_from(crypto).unwrap()))
     }
 
-    #[tokio::test(start_paused = true)]
+    #[async_runtime::test(start_paused = true)]
     async fn test_quic_handshake_and_bidi_stream_works() {
         let rt = quinn::default_runtime().unwrap();
 
@@ -281,7 +281,7 @@ mod test {
         client_endpoint.set_default_client_config(client_config);
 
         // Run server in the background
-        let server_handle = tokio::spawn(async move {
+        let server_handle = async_runtime::spawn(async move {
             let conn = server_endpoint.accept().await.unwrap().await.unwrap();
             let (mut bi_tx, mut bi_rx) = conn.accept_bi().await.unwrap();
 
@@ -310,7 +310,7 @@ mod test {
         server_handle.await.unwrap();
     }
 
-    #[tokio::test(start_paused = true)]
+    #[async_runtime::test(start_paused = true)]
     async fn test_packet_arrives_at_expected_time() {
         // Sanity check
         let network = default_network().call();
@@ -365,7 +365,7 @@ mod test {
         }
     }
 
-    #[tokio::test(start_paused = true)]
+    #[async_runtime::test(start_paused = true)]
     async fn test_packet_is_delayed_by_buffering() {
         let bandwidths_and_delays = [
             (BANDWIDTH_100_MBPS, Duration::from_millis(1)),
@@ -428,7 +428,7 @@ mod test {
         }
     }
 
-    #[tokio::test(start_paused = true)]
+    #[async_runtime::test(start_paused = true)]
     async fn test_packet_is_buffered_when_link_down() {
         // Let one of the links be down for 10 seconds
         let network = default_network()

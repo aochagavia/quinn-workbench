@@ -1,11 +1,11 @@
 use crate::InTransitData;
+use async_runtime::time::{Instant, Sleep};
 use parking_lot::Mutex;
 use std::collections::BinaryHeap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker, ready};
 use std::time::Duration;
-use tokio::time::{Instant, Sleep};
 
 pub struct InboundQueue {
     queue: BinaryHeap<PrioritizedInTransitData>,
@@ -89,7 +89,9 @@ impl Future for NextPacketDelivery {
 
             if next_arrival_time > Instant::now() {
                 // Sleep in the next iteration until we are allowed to deliver the next packet
-                self.sleep = Some(Box::pin(tokio::time::sleep_until(next_arrival_time)));
+                self.sleep = Some(Box::pin(async_runtime::time::sleep_until(
+                    next_arrival_time,
+                )));
             } else {
                 // Deliver the next packet
                 let data = self.queue.lock().queue.pop().unwrap();

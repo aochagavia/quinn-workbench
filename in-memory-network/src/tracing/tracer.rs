@@ -9,11 +9,11 @@ use crate::tracing::simulation_step::{
 };
 use crate::tracing::simulation_stepper::SimulationStepper;
 use crate::tracing::simulation_verifier::SimulationVerifier;
+use async_runtime::time::Instant;
 use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::Instant;
 
 pub struct SimulationStepTracer {
     simulation_start: Instant,
