@@ -24,6 +24,8 @@ pub struct Rt {
 pub(crate) struct RtInner {
     // Time-keeping
     pub(crate) now: Mutex<std::time::Instant>,
+    pub(crate) last_time_jump_to: Mutex<std::time::Instant>,
+    pub(crate) timer_granularity: Duration,
 
     // Scheduling
     pub(crate) next_task_id: AtomicU64,
@@ -47,11 +49,27 @@ impl Debug for Rt {
 
 impl Default for Rt {
     fn default() -> Self {
-        Self::new()
+        Self::new(Duration::from_secs(0))
     }
 }
 
 impl Rt {
+    pub fn new(timer_granularity: Duration) -> Self {
+        let now = StdInstant::now();
+        Self {
+            inner: Arc::new(RtInner {
+                now: Mutex::new(now),
+                last_time_jump_to: Mutex::new(now),
+                timer_granularity,
+                next_task_id: Default::default(),
+                ready_to_poll_tasks: Default::default(),
+                pending_timers: Default::default(),
+                wakers_by_timer_id: Default::default(),
+                blocked_tasks: Default::default(),
+            }),
+        }
+    }
+
     pub fn new_timer(&self, deadline: StdInstant) -> Timer {
         Timer::new(self.inner.clone(), deadline)
     }
@@ -84,20 +102,6 @@ impl Rt {
 
     fn unregister_active(&self) {
         ACTIVE_RT.set(None);
-    }
-
-    pub fn new() -> Self {
-        let now = StdInstant::now();
-        Self {
-            inner: Arc::new(RtInner {
-                now: Mutex::new(now),
-                next_task_id: Default::default(),
-                ready_to_poll_tasks: Default::default(),
-                pending_timers: Default::default(),
-                wakers_by_timer_id: Default::default(),
-                blocked_tasks: Default::default(),
-            }),
-        }
     }
 
     pub fn sleep(&self, duration: Duration) -> Timer {
@@ -171,57 +175,88 @@ impl Rt {
                 ),
             };
 
-            match timer.handler.as_enum() {
-                PendingTimerHandlerEnum::WakeWaitingTasks => {
-                    // Refuse to "advance" into the past
-                    assert!(*self.inner.now.lock() <= timer.elapsed_at);
-                    *self.inner.now.lock() = timer.elapsed_at;
-
-                    // Wake all waiting tasks
-                    let wakers = self
-                        .inner
-                        .wakers_by_timer_id
-                        .lock()
-                        .remove(&timer.timer_id)
-                        .unwrap_or_default();
-                    for waker in wakers {
-                        waker.wake();
-                    }
-
-                    // Stop handling timers, since after this one we should already be able to make
-                    // progress
+            let at_least_one_task_unblocked = self.handle_timer_elapsed(timer);
+            if at_least_one_task_unblocked {
+                // We made progress, so we can stop handling timers. However, if the next timer is
+                // ready, we will handle it right away.
+                let next_timer_ready = self
+                    .inner
+                    .pending_timers
+                    .lock()
+                    .peek()
+                    .is_some_and(|t| t.elapsed_at <= *self.inner.now.lock());
+                if !next_timer_ready {
                     break;
                 }
-                PendingTimerHandlerEnum::Ignore => {
-                    // Nothing to do here, move on to the next timer
+            }
+        }
+    }
+
+    fn handle_timer_elapsed(&self, timer: Arc<PendingTimer>) -> bool {
+        match timer.handler.as_enum() {
+            PendingTimerHandlerEnum::WakeWaitingTasks => {
+                let now = *self.inner.now.lock();
+
+                if now < timer.elapsed_at {
+                    if self.inner.timer_granularity.is_zero() {
+                        // Advance to the exact moment when the timer elapsed
+                        *self.inner.now.lock() = timer.elapsed_at;
+                    } else {
+                        // Advance an exact multiple of `timer_granularity` since the last time jump
+                        let diff = timer.elapsed_at - *self.inner.last_time_jump_to.lock();
+                        let elapsed_intervals = (self.inner.timer_granularity.as_secs_f64()
+                            / diff.as_secs_f64())
+                        .ceil() as u32;
+                        let jump_duration = self.inner.timer_granularity * elapsed_intervals;
+                        *self.inner.now.lock() = now + jump_duration;
+                        *self.inner.last_time_jump_to.lock() = now + jump_duration;
+                    }
                 }
-                PendingTimerHandlerEnum::CancelWaitingTasks => {
-                    let wakers = self
-                        .inner
-                        .wakers_by_timer_id
-                        .lock()
-                        .remove(&timer.timer_id)
-                        .unwrap_or_default();
 
-                    // Cancel waiting tasks
-                    for waker in wakers {
-                        let is_noop_waker = waker.data().is_null();
-                        if is_noop_waker {
-                            continue;
-                        }
+                // Wake all waiting tasks
+                let wakers = self
+                    .inner
+                    .wakers_by_timer_id
+                    .lock()
+                    .remove(&timer.timer_id)
+                    .unwrap_or_default();
+                for waker in wakers {
+                    waker.wake();
+                }
 
-                        // Obtain the task id from the waker
-                        let waker: Arc<waker::TaskWaker> =
-                            unsafe { Arc::from_raw(waker.data() as _) };
-                        let task_id = waker.task_id();
-                        std::mem::forget(waker);
+                // At least one task was unblocked
+                true
+            }
+            PendingTimerHandlerEnum::Ignore => {
+                // No tasks unblocked
+                false
+            }
+            PendingTimerHandlerEnum::CancelWaitingTasks => {
+                let wakers = self
+                    .inner
+                    .wakers_by_timer_id
+                    .lock()
+                    .remove(&timer.timer_id)
+                    .unwrap_or_default();
 
-                        // Remove blocked task
-                        self.inner.blocked_tasks.lock().remove(&task_id);
+                // Cancel waiting tasks
+                for waker in wakers {
+                    let is_noop_waker = waker.data().is_null();
+                    if is_noop_waker {
+                        continue;
                     }
 
-                    // Move on to the next timer
+                    // Obtain the task id from the waker
+                    let waker: Arc<waker::TaskWaker> = unsafe { Arc::from_raw(waker.data() as _) };
+                    let task_id = waker.task_id();
+                    std::mem::forget(waker);
+
+                    // Remove blocked task
+                    self.inner.blocked_tasks.lock().remove(&task_id);
                 }
+
+                // No tasks unblocked, only cancelled
+                false
             }
         }
     }
@@ -339,7 +374,7 @@ mod test {
 
     #[test]
     fn test_waiting_timers_ordered_correctly() {
-        let rt = Rt::new();
+        let rt = Rt::default();
         rt.block_on(async {
             let rt_cp = rt.clone();
             rt.spawn(Box::pin(async move {
@@ -390,7 +425,7 @@ mod test {
 
     #[test]
     fn test_select_timer() {
-        let rt = Rt::new();
+        let rt = Rt::default();
         rt.block_on(async {
             for _ in 0..100 {
                 let result;
@@ -406,7 +441,7 @@ mod test {
 
     #[test]
     fn test_select_task() {
-        let rt = Rt::new();
+        let rt = Rt::default();
         rt.block_on(async {
             for _ in 0..100 {
                 let t1 = async {
@@ -430,7 +465,7 @@ mod test {
     #[test]
     #[should_panic]
     fn test_block_on_stuck_panics() {
-        let rt = Rt::new();
+        let rt = Rt::default();
         rt.block_on(async {
             // A future that never completes and has no timers
             future::pending::<()>().await;
@@ -439,7 +474,7 @@ mod test {
 
     #[test]
     fn test_multiple_spawned_tasks_timer_order() {
-        let rt = Rt::new();
+        let rt = Rt::default();
         let completion_order = Arc::new(Mutex::new(VecDeque::new()));
 
         rt.block_on(async {
@@ -474,7 +509,7 @@ mod test {
 
     #[test]
     fn test_nested_spawn() {
-        let rt = Rt::new();
+        let rt = Rt::default();
         let inner_task_completed = Arc::new(AtomicBool::new(false));
 
         rt.block_on(async {
@@ -500,7 +535,7 @@ mod test {
     #[test]
     fn test_many_tasks() {
         const NUM_TASKS: usize = 1000;
-        let rt = Rt::new();
+        let rt = Rt::default();
         let completed_count = Arc::new(AtomicUsize::new(0));
 
         rt.block_on(async {
@@ -528,7 +563,7 @@ mod test {
     #[test]
     #[should_panic(expected = "Spawned task panicked")]
     fn test_spawned_task_panics() {
-        let rt = Rt::new();
+        let rt = Rt::default();
         rt.block_on(async {
             rt.spawn(Box::pin(async {
                 sleep(Duration::from_millis(10)).await;
@@ -542,7 +577,7 @@ mod test {
 
     #[test]
     fn test_zero_duration_sleep() {
-        let rt = Rt::new();
+        let rt = Rt::default();
         let task_completed = Arc::new(AtomicBool::new(false));
         let flag_clone = task_completed.clone();
 
@@ -564,7 +599,7 @@ mod test {
 
     #[test]
     fn test_main_future_completes_before_spawned_tasks() {
-        let rt = Rt::new();
+        let rt = Rt::default();
         let done_tasks = Arc::new(Mutex::new(Vec::new()));
 
         rt.block_on(async {
@@ -620,7 +655,7 @@ mod test {
 
     #[test]
     fn test_task_repeatedly_wakes_itself() {
-        let rt = Rt::new();
+        let rt = Rt::default();
         let wakes = Arc::new(AtomicUsize::new(0));
         const MAX_WAKES: usize = 5;
 

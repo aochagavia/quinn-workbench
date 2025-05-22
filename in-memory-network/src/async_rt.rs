@@ -14,7 +14,7 @@ cfg_if! {
         use crate::quinn_interop::RtAdapter;
 
         pub fn new_rt() -> async_runtime::rt::Rt {
-            async_runtime::rt::Rt::new()
+            async_runtime::rt::Rt::new(std::time::Duration::from_millis(0))
         }
 
         pub fn active_rt() -> Arc<dyn Runtime> {

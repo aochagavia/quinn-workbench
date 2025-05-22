@@ -7006,5 +7006,31 @@
       "packet_size_bytes": 36,
       "node_id": "Earth1"
     }
+  },
+  {
+    "relative_time_ns": 3600000000000,
+    "type": "packetInNode",
+    "data": {
+      "packet_id": "29bc07ba-a15d-b429-70b1-835087431160",
+      "packet_number": 120,
+      "packet_size_bytes": 36,
+      "node_id": "Earth1"
+    }
+  },
+  {
+    "relative_time_ns": 3600000000000,
+    "type": "networkEvent",
+    "data": {
+      "linkId": "Earth1-MoonOrbiter1",
+      "status": "down"
+    }
+  },
+  {
+    "relative_time_ns": 3600000000000,
+    "type": "networkEvent",
+    "data": {
+      "linkId": "MoonOrbiter1-Earth1",
+      "status": "down"
+    }
   }
 ]
