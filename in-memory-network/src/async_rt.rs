@@ -7,14 +7,14 @@ compile_error!("Feature 'rt-custom' and 'rt-tokio' cannot be enabled at the same
 
 cfg_if! {
     if #[cfg(feature = "rt-custom")] {
-        pub use async_runtime::time;
-        pub use async_runtime::spawn;
-        pub use async_runtime::time::timer::Timer;
-        pub use async_runtime::rt::JoinHandle;
+        pub use sittard::time;
+        pub use sittard::spawn;
+        pub use sittard::time::Timer;
+        pub use sittard::JoinHandle;
         use crate::quinn_interop::RtAdapter;
 
-        pub fn new_rt() -> async_runtime::rt::Rt {
-            async_runtime::rt::Rt::new(std::time::Duration::from_millis(0))
+        pub fn new_rt() -> sittard::Runtime {
+            sittard::Runtime::default()
         }
 
         pub fn active_rt() -> Arc<dyn Runtime> {

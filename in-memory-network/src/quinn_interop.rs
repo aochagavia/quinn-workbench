@@ -205,8 +205,8 @@ impl Future for UdpReceive<'_, '_> {
 
 cfg_if! {
     if #[cfg(feature = "rt-custom")] {
-        use async_runtime::rt::Rt;
-        use async_runtime::time::timer::Timer;
+        use sittard::Runtime as Rt;
+        use sittard::time::Timer;
         use std::time::Instant;
         use std::net::UdpSocket;
         use quinn::{AsyncTimer, Runtime};

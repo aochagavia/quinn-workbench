@@ -238,7 +238,10 @@ impl PacketPacer {
     fn duration_until_can_send(&self, now: Instant) -> Duration {
         match &self.last_send {
             None => Duration::default(),
-            Some(p) => p.send_done.saturating_duration_since(now),
+            Some(p) => p
+                .send_done
+                .into_std()
+                .saturating_duration_since(now.into_std()),
         }
     }
 

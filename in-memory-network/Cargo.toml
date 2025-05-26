@@ -5,12 +5,11 @@ edition = "2024"
 
 [features]
 rt-tokio = ["dep:tokio", "quinn/runtime-tokio"]
-rt-custom = ["dep:async-runtime"]
+rt-custom = ["dep:sittard"]
 
 [dependencies]
 anyhow.workspace = true
 async-lock.workspace = true
-async-runtime = { path = "../async-runtime", optional = true }
 cfg-if.workspace = true
 event-listener.workspace = true
 fastrand.workspace = true
@@ -24,6 +23,7 @@ quinn.workspace = true
 uuid.workspace = true
 serde.workspace = true
 serde_with.workspace = true
+sittard = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, optional = true }
 

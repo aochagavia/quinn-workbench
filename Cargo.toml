@@ -1,5 +1,5 @@
 [workspace]
-members = [ "async-runtime", "async-runtime-macros", "golden-tests", "in-memory-network", "quinn-workbench"]
+members = ["golden-tests", "in-memory-network", "quinn-workbench"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -26,6 +26,7 @@ serde = "1.0.203"
 serde_json = "1.0.117"
 serde_with = "3.11.0"
 similar = { version = "2.7.0", features = ["inline"] }
+sittard = "0.1.0"
 syn = {version = "2.0.101", features = ["full"]}
 thiserror = "2.0.12"
 tokio = { version = "1.37.0", features = ["test-util", "macros"] }
