@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct QuinnJsonConfig {
     /// The initial RTT of the QUIC connection, in milliseconds (used before an RTT sample is
     /// available).

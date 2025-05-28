@@ -72,10 +72,6 @@ pub struct QuicOpt {
     #[arg(long, default_value_t = 1024)]
     pub response_size: usize,
 
-    /// Path to the JSON file containing the desired quinn config
-    #[arg(long)]
-    pub quinn_config: PathBuf,
-
     #[command(flatten)]
     pub network: NetworkOpt,
 }

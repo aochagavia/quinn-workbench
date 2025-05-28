@@ -16,15 +16,10 @@ mod client;
 mod server;
 pub mod simulation;
 
-pub async fn run_and_report_stats(
-    quic_options: &QuicOpt,
-    quinn_config: QuinnJsonConfig,
-) -> anyhow::Result<()> {
+pub async fn run_and_report_stats(quic_options: &QuicOpt) -> anyhow::Result<()> {
     let mut simulation = QuicSimulation::new();
     let network_config = load_network_config(&quic_options.network)?;
-    let result = simulation
-        .run(quic_options, network_config, quinn_config)
-        .await;
+    let result = simulation.run(quic_options, network_config).await;
 
     let Some((tracer, network)) = simulation.tracer_and_network else {
         eprintln!("Error...");

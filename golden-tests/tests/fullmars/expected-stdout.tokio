@@ -1,7 +1,6 @@
 --- Params ---
 * Quinn seed: 0
 * Network seed: 42
-* Quinn config path: test-data/earth-mars/quinn.json
 * Network graph path: test-data/earth-mars/networkgraph-fullmars.json
 * Network events path: test-data/earth-mars/events.json
 --- Network ---

@@ -1,6 +1,5 @@
 use crate::config::NetworkConfig;
 use crate::config::cli::QuicOpt;
-use crate::config::quinn::QuinnJsonConfig;
 use crate::quic::{client, server};
 use anyhow::{Context, bail};
 use async_lock::Semaphore;
@@ -33,7 +32,6 @@ impl QuicSimulation {
         &mut self,
         quic_options: &QuicOpt,
         network_config: NetworkConfig,
-        quinn_config: QuinnJsonConfig,
     ) -> anyhow::Result<()> {
         println!("--- Params ---");
         let (quinn_rng_seed, simulated_network_rng_seed) = if quic_options.network.non_deterministic
@@ -49,10 +47,6 @@ impl QuicSimulation {
         println!("* Quinn seed: {}", quinn_rng_seed);
         println!("* Network seed: {}", simulated_network_rng_seed);
         println!(
-            "* Quinn config path: {}",
-            quic_options.quinn_config.display()
-        );
-        println!(
             "* Network graph path: {}",
             quic_options.network.network_graph.display()
         );
@@ -62,6 +56,8 @@ impl QuicSimulation {
         );
 
         let start = Instant::now();
+
+        let quic_configs = network_config.network_graph.quic_configs();
 
         // Network check
         let network_spec: NetworkSpec = network_config.network_graph.into();
@@ -100,7 +96,6 @@ impl QuicSimulation {
             arrived1.as_millis(),
             arrived2.as_millis()
         );
-
         drop(network);
 
         let start = Instant::now();
@@ -130,7 +125,7 @@ impl QuicSimulation {
             cert.clone(),
             key.into(),
             network.udp_socket_for_node(server_host.clone()),
-            &quinn_config,
+            &quic_configs[server_host.id().as_ref()],
             &mut quinn_rng,
         )?;
         let mut server_handled_connections =
@@ -141,7 +136,7 @@ impl QuicSimulation {
         let client = client::client_endpoint(
             cert,
             network.udp_socket_for_node(client_host.clone()),
-            &quinn_config,
+            &quic_configs[client_host.id().as_ref()],
             &mut quinn_rng,
         )?;
 

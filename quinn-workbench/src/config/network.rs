@@ -1,8 +1,10 @@
+use crate::config::quinn::QuinnJsonConfig;
 use in_memory_network::network::event::{NetworkEvent, NetworkEventPayload, UpdateLinkStatus};
 use in_memory_network::network::ip::Ipv4Cidr;
 use in_memory_network::network::route::IpRange;
 use serde::Deserialize;
 use serde_with::{DisplayFromStr, serde_as};
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::time::Duration;
 
@@ -10,6 +12,19 @@ use std::time::Duration;
 pub struct NetworkSpecJson {
     nodes: Vec<NetworkNodeJson>,
     links: Vec<NetworkLinkJson>,
+}
+
+impl NetworkSpecJson {
+    pub fn quic_configs(&self) -> HashMap<String, QuinnJsonConfig> {
+        let mut configs = HashMap::new();
+        for node in &self.nodes {
+            if let NetworkNodeKindJson::Host { quic } = &node.kind {
+                configs.insert(node.id.clone(), quic.clone());
+            }
+        }
+
+        configs
+    }
 }
 
 #[derive(Deserialize, Clone)]
@@ -35,7 +50,7 @@ struct NetworkNodeJson {
 #[serde(rename_all = "camelCase")]
 enum NetworkNodeKindJson {
     Router,
-    Host,
+    Host { quic: QuinnJsonConfig },
 }
 
 #[derive(Deserialize, Clone)]
@@ -103,7 +118,9 @@ impl From<NetworkSpecJson> for in_memory_network::network::spec::NetworkSpec {
                     NetworkNodeKindJson::Router => {
                         in_memory_network::network::spec::NodeKind::Router
                     }
-                    NetworkNodeKindJson::Host => in_memory_network::network::spec::NodeKind::Host,
+                    NetworkNodeKindJson::Host { .. } => {
+                        in_memory_network::network::spec::NodeKind::Host
+                    }
                 },
                 buffer_size_bytes: n.buffer_size_bytes,
                 interfaces: n

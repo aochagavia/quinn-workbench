@@ -32,10 +32,7 @@ fn main() -> anyhow::Result<()> {
 
     let rt = async_rt::new_rt();
     match &opt.command {
-        Command::Quic(quic_opt) => {
-            let quinn = load_json(&quic_opt.quinn_config)?;
-            rt.block_on(quic::run_and_report_stats(quic_opt, quinn))
-        }
+        Command::Quic(quic_opt) => rt.block_on(quic::run_and_report_stats(quic_opt)),
         Command::Ping(ping_opt) => {
             let network_config = load_network_config(&ping_opt.network)?;
             rt.block_on(ping::run(ping_opt, network_config))

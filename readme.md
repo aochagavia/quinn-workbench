@@ -39,8 +39,7 @@ cargo run --release --bin quinn-workbench -- \
   --network-graph test-data/earth-mars/networkgraph-fullmars.json \
   --network-events test-data/earth-mars/events.json \
   --client-ip-address 192.168.40.1 \
-  --server-ip-address 192.168.43.2 \
-  --quinn-config test-data/earth-mars/quinn.json
+  --server-ip-address 192.168.43.2
 ```
 
 Here's an example issuing a single request and receiving a 10 MiB response:
@@ -52,7 +51,6 @@ cargo run --release --bin quinn-workbench -- \
   --network-events test-data/earth-mars/events.json \
   --client-ip-address 192.168.40.1 \
   --server-ip-address 192.168.43.2 \
-  --quinn-config test-data/earth-mars/quinn.json \
   --requests 1 --response-size 10485760
 ```
 
@@ -66,7 +64,6 @@ cargo run --release --bin quinn-workbench -- \
   --client-ip-address 192.168.40.1 \
   --server-ip-address 192.168.43.2 \
   --network-rng-seed 1337 \
-  --quinn-config test-data/earth-mars/quinn.json \
   --quinn-rng-seed 1234
 ```
 
@@ -79,16 +76,47 @@ cargo run --release --bin quinn-workbench -- \
   --network-events test-data/earth-mars/events.json \
   --client-ip-address 192.168.40.1 \
   --server-ip-address 192.168.43.2 \
-  --non-deterministic \
-  --quinn-config test-data/earth-mars/quinn.json
+  --non-deterministic
 ```
 
 ## JSON config details
 
-#### Quinn config
+#### Network topology config
 
-Consider the following quinn config (which gets loaded through the `--quinn-config` flag, as shown
-in the previous examples):
+The topology configuration is fairly self-documenting. See for instance
+[networkgraph-fullmars.json](test-data/earth-mars/networkgraph-fullmars.json) and
+[networkgraph-5nodes.json](test-data/earth-mars/networkgraph-5nodes.json)
+
+Note that links are uni-directional, so two entries are necessary to describe a bidirectional link.
+Also, links can be configured individually with the following parameters:
+
+- `link.delay_ms` (required): The delay of the link in milliseconds (i.e. time it takes for a packet
+  to arrive to its destination).
+- `link.bandwidth_bps` (required): The bandwidth of the link in bits per second.
+- `link.extra_delay_ms`: The additional delay of the link in milliseconds, applied randomly
+  according to `extra_delay_ratio`.
+- `link.extra_delay_ratio`: The ratio of packets that will have an extra delay applied, used to
+  artificially introduce packet reordering (the value must be between 0 and 1).
+- `link.congestion_event_ratio`: The ratio of packets that will be marked with a CE ECN codepoint
+  (the value must be between 0 and 1).
+
+Next to links, nodes can be configured with the following parameters too:
+
+- `node.packet_duplication_ratio`: The ratio of packets that will be duplicated upon arrival to the
+  node, (the value must be between 0 and 1).
+- `node.packet_loss_ratio`: The ratio of packets that will be lost upon arrival to the node (the
+  value must be between 0 and 1).
+
+#### Network events config
+
+Network events are used to bring links up and down at different times of the simulation (e.g. to
+simulate an orbiter being unreachable at specific intervals). The format is fairly self-documenting,
+as you can see in [events.json](test-data/earth-mars/events.json).
+
+#### QUIC config
+
+Each host node in a network graph's json file has a `quic` field, specifying the QUIC parameters
+used by that node. Consider the following example:
 
 ```json
 {
@@ -125,39 +153,6 @@ Here's the meaning of the different parameters:
   information from the server without sending anything back from the client.
 - `fixed_congestion_window` (optional): If provided, disables congestion control and uses a
   fixed congestion window size in bytes.
-
-#### Network topology config
-
-The topology configuration is fairly self-documenting. See for instance
-[networkgraph-fullmars.json](test-data/earth-mars/networkgraph-fullmars.json) and
-[networkgraph-5nodes.json](test-data/earth-mars/networkgraph-5nodes.json)
-
-Note that links are uni-directional, so two entries are necessary to describe a bidirectional link.
-Also, links can be configured individually with the following parameters:
-
-- `link.delay_ms` (required): The delay of the link in milliseconds (i.e. time it takes for a packet
-  to arrive to its destination).
-- `link.bandwidth_bps` (required): The bandwidth of the link in bits per second.
-- `link.extra_delay_ms`: The additional delay of the link in milliseconds, applied randomly
-  according to `extra_delay_ratio`.
-- `link.extra_delay_ratio`: The ratio of packets that will have an extra delay applied, used to
-  artificially introduce packet reordering (the value must be between 0 and 1).
-- `link.congestion_event_ratio`: The ratio of packets that will be marked with a CE ECN codepoint
-  (the value must be between 0 and 1).
-
-Next to links, nodes can be configured with the following parameters too:
-
-- `node.packet_duplication_ratio`: The ratio of packets that will be duplicated upon arrival to the
-  node, (the value must be between 0 and 1).
-- `node.packet_loss_ratio`: The ratio of packets that will be lost upon arrival to the node (the
-  value must be between 0 and 1).
-
-
-#### Network events config
-
-Network events are used to bring links up and down at different times of the simulation (e.g. to
-simulate an orbiter being unreachable at specific intervals). The format is fairly self-documenting,
-as you can see in [events.json](test-data/earth-mars/events.json).
 
 ## Command line arguments
 

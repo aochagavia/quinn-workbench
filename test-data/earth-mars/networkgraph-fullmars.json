@@ -25,7 +25,17 @@
             }
           ]
         }
-      ]
+      ],
+      "quic": {
+        "initial_rtt_ms": 3600000,
+        "maximum_idle_timeout_ms": 100000000000,
+        "packet_threshold": 4294967295,
+        "mtu_discovery": false,
+        "maximize_send_and_receive_windows": true,
+        "max_ack_delay_ms": 18446744073709551615,
+        "ack_eliciting_threshold": 10,
+        "use_ecn_based_reno": false
+      }
     },
     {
       "id": "DSN",
@@ -459,7 +469,17 @@
           ],
           "routes": []
         }
-      ]
+      ],
+      "quic": {
+        "initial_rtt_ms": 3600000,
+        "maximum_idle_timeout_ms": 100000000000,
+        "packet_threshold": 4294967295,
+        "mtu_discovery": false,
+        "maximize_send_and_receive_windows": true,
+        "max_ack_delay_ms": 18446744073709551615,
+        "ack_eliciting_threshold": 10,
+        "use_ecn_based_reno": false
+      }
     },
     {
       "id": "ING",
@@ -480,7 +500,17 @@
             }
           ]
         }
-      ]
+      ],
+      "quic": {
+        "initial_rtt_ms": 3600000,
+        "maximum_idle_timeout_ms": 100000000000,
+        "packet_threshold": 4294967295,
+        "mtu_discovery": false,
+        "maximize_send_and_receive_windows": true,
+        "max_ack_delay_ms": 18446744073709551615,
+        "ack_eliciting_threshold": 10,
+        "use_ecn_based_reno": false
+      }
     }
   ],
   "links": [

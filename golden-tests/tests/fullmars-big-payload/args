@@ -1,5 +1,4 @@
 quic
---quinn-config test-data/earth-mars/quinn.json
 --requests 1
 --response-size 10485760
 --network-graph test-data/earth-mars/networkgraph-fullmars.json
